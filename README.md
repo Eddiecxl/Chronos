@@ -25,6 +25,18 @@ https://your-project.vercel.app/?view=Eddie
 
 All entered and displayed times are Malaysia Time (`Asia/Kuala_Lumpur`, UTC+8).
 
+## MongoDB data model
+
+Chronos initializes these Atlas collections automatically when the API starts:
+
+- `accounts` — credentials are salted and hashed with scrypt; raw passwords and PINs are never stored.
+- `friendRequests` — pending, accepted, and rejected social requests.
+- `rooms` — persistent lobby rooms that only their creator can delete.
+- `messages` — room conversation history.
+- `plans` — user schedules.
+
+MongoDB automatically removes room messages 30 days after `createdAt` through the `delete_messages_after_30_days` TTL index (`expireAfterSeconds: 2592000`). TTL deletion is asynchronous, so an expired document may remain briefly before Atlas removes it.
+
 ## Production architecture
 
 - **Vercel:** React/Vite frontend
