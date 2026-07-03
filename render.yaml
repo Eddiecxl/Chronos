@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: chronos-planner
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB
+        value: chronos
+      - key: CLIENT_ORIGIN
+        sync: false
