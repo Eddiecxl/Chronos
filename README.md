@@ -64,6 +64,8 @@ MONGODB_DB=chronos
 CLIENT_ORIGIN=https://your-project.vercel.app
 ```
 
+Deploy Render first. After the service is live, verify `https://YOUR-SERVICE.onrender.com/api/health` returns `{"status":"ok","storage":"mongodb"}`. Free Render services may take roughly a minute to wake after inactivity; the Chronos live-event clients reconnect automatically.
+
 For multiple allowed frontend domains, separate `CLIENT_ORIGIN` values with commas.
 
 ### 3. Vercel frontend
@@ -77,6 +79,10 @@ VITE_API_URL=https://your-api.onrender.com
 ```
 
 Redeploy after changing an environment variable.
+
+After Vercel assigns the final production domain, return to Render and set `CLIENT_ORIGIN` to that exact HTTPS origin, without a trailing slash. Multiple origins may be comma-separated. Then redeploy/restart Render and verify account registration from the Vercel site.
+
+Browser GPS requires HTTPS. Vercel provides HTTPS automatically; users must still grant location permission themselves.
 
 ## Important prototype limitation
 

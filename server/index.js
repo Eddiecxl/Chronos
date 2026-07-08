@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { accountExists, addPlan, addRoomMessage, answerFriendRequest, createAccount, createFriendRequest, createRoom, deleteRoom, getPlans, getRoom, getRoomMessages, getSocial, initStore, kickRoomMember, loginAccount, markMessageSeen, recordUser, removeFriend, removePlan, resetAccountPin, setAccountPresence, updatePlan } from './store.js';
+import { accountExists, addPlan, addRoomMessage, answerFriendRequest, clearAccountLocation, clearNotifications, createAccount, createFriendRequest, createRoom, deleteRoom, dismissNotification, getCachedGeocode, getLiveLocations, getPlans, getRoom, getRoomMessages, getSocial, initStore, kickRoomMember, loginAccount, markMessageSeen, recordUser, removeFriend, removePlan, resetAccountPin, saveCachedGeocode, setAccountPresence, updateAccountLocation, updatePlan } from './store.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -28,6 +28,15 @@ const publishRoomMember = (roomId, username, type, payload = {}) => { const mess
 const cleanUsername = (value) => String(value || '').trim().slice(0, 40);
 const validPin = (value) => /^\d{3}$/.test(String(value || ''));
 const validUsername = (value) => /^[A-Za-z0-9_.-]{3,24}$/.test(value);
+let lastGeocodeAt = 0;
+const geocodeMalaysia = async (location) => {
+  const queryKey = location.trim().toLowerCase(); if (!queryKey) return null;
+  const cached = await getCachedGeocode(queryKey); if (cached) return cached.found ? cached : null;
+  const wait = Math.max(0, 1050 - (Date.now() - lastGeocodeAt)); if (wait) await new Promise((resolve) => setTimeout(resolve, wait)); lastGeocodeAt = Date.now();
+  const url = new URL('https://nominatim.openstreetmap.org/search'); url.search = new URLSearchParams({ q: `${location}, Malaysia`, format: 'jsonv2', countrycodes: 'my', limit: '1', addressdetails: '1' });
+  const response = await fetch(url, { headers: { 'User-Agent': 'Chronos-Time-Planning-App/1.0 (https://github.com/Eddiecxl/Chronos)', Accept: 'application/json' } });
+  const [result] = response.ok ? await response.json() : []; const entry = result ? { queryKey, found: true, latitude: Number(result.lat), longitude: Number(result.lon), locationLabel: result.display_name, geocodedAt: new Date() } : { queryKey, found: false, geocodedAt: new Date() }; await saveCachedGeocode(entry); return entry.found ? entry : null;
+};
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', storage: process.env.MONGODB_URI ? 'mongodb' : 'local', timeZone: 'Asia/Kuala_Lumpur' }));
 app.post('/api/users', async (req, res) => {
@@ -67,6 +76,9 @@ app.get('/api/events/:username', async (req, res) => {
   req.on('close', async () => { clearInterval(heartbeat); clients.delete(res); if (!clients.size) { liveClients.delete(usernameKey); const presence = await setAccountPresence(usernameKey, 'offline'); if (presence.changed) presence.friends.forEach((friend) => publish(friend, 'presence', { username: usernameKey, status: 'offline' })); } });
 });
 app.post('/api/presence', async (req, res) => { const username = cleanUsername(req.body.username); const status = ['online', 'idle'].includes(req.body.status) ? req.body.status : null; if (!username || !status) return res.status(400).json({ error: 'Valid presence is required.' }); const presence = await setAccountPresence(username, status); if (presence.changed) presence.friends.forEach((friend) => publish(friend, 'presence', { username, status })); res.status(204).end(); });
+app.get('/api/live-locations/:username', async (req, res) => res.json(await getLiveLocations(cleanUsername(req.params.username))));
+app.put('/api/live-location', async (req, res) => { const username = cleanUsername(req.body.username); const latitude = Number(req.body.latitude); const longitude = Number(req.body.longitude); const accuracy = Number(req.body.accuracy); if (!username || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return res.status(400).json({ error: 'Valid live coordinates are required.' }); const updated = await updateAccountLocation(username, { latitude, longitude, accuracy: Number.isFinite(accuracy) ? accuracy : null }); if (!updated) return res.status(404).json({ error: 'Account not found.' }); updated.friends.forEach((friend) => publish(friend, 'location', { username: updated.username })); res.status(204).end(); });
+app.delete('/api/live-location/:username', async (req, res) => { await clearAccountLocation(cleanUsername(req.params.username)); res.status(204).end(); });
 app.get('/api/rooms/:id/events', (req, res) => {
   const username = cleanUsername(req.query.username); const roomId = req.params.id;
   if (!username) return res.status(400).end();
@@ -82,6 +94,8 @@ app.get('/api/social/:username', async (req, res) => {
   if (!social) return res.status(404).json({ error: 'Account not found.' });
   res.json(social);
 });
+app.delete('/api/notifications/:id', async (req, res) => { if (!(await dismissNotification(cleanUsername(req.query.username), req.params.id))) return res.status(404).json({ error: 'Account not found.' }); res.status(204).end(); });
+app.delete('/api/notifications', async (req, res) => { if (!(await clearNotifications(cleanUsername(req.query.username)))) return res.status(404).json({ error: 'Account not found.' }); res.status(204).end(); });
 app.post('/api/friend-requests', async (req, res) => {
   const from = cleanUsername(req.body.from).toLowerCase(); const to = cleanUsername(req.body.to).toLowerCase();
   if (!from || !to || from === to) return res.status(400).json({ error: 'Choose another valid account.' });
@@ -131,9 +145,10 @@ app.get('/api/plans', async (req, res) => {
   res.json(await getPlans(username));
 });
 app.post('/api/plans', async (req, res) => {
-  const { username, title, date, startTime, endTime, category = 'Focus', status = 'Busy', priority = 'Medium', notes = '', location = '' } = req.body;
+  const { username, title, date, startTime, endTime, category = 'Focus', status = 'Busy', priority = 'None', notes = '', location = '', latitude, longitude, locationAccuracy, locationLabel } = req.body;
   if (![username, title, date, startTime, endTime].every(Boolean)) return res.status(400).json({ error: 'Please complete all required fields.' });
-  const plan = { id: crypto.randomUUID(), username, title: String(title).slice(0, 80), date, startTime, endTime, category, status, priority, notes: String(notes).slice(0, 300), location: String(location).trim().slice(0, 100), completed: false, timeZone: 'Asia/Kuala_Lumpur' };
+  const cleanLocation = String(location).trim().slice(0, 100); const gpsValid = Number.isFinite(Number(latitude)) && Number.isFinite(Number(longitude)); let coordinates = gpsValid ? { latitude: Number(latitude), longitude: Number(longitude), locationAccuracy: Number(locationAccuracy) || null, locationLabel: String(locationLabel || 'Automatic device location').slice(0, 180) } : null; if (!coordinates && cleanLocation && cleanLocation !== 'Automatic device location') { try { coordinates = await geocodeMalaysia(cleanLocation); } catch (error) { console.warn('Location geocoding unavailable:', error.message); } }
+  const plan = { id: crypto.randomUUID(), username, title: String(title).slice(0, 80), date, startTime, endTime, category, status, priority, notes: String(notes).slice(0, 300), location: cleanLocation, ...(coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude, locationAccuracy: coordinates.locationAccuracy || null, locationLabel: coordinates.locationLabel } : {}), completed: false, timeZone: 'Asia/Kuala_Lumpur' };
   res.status(201).json(await addPlan(plan));
 });
 app.patch('/api/plans/:id', async (req, res) => {

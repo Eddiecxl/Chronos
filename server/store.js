@@ -34,6 +34,7 @@ export async function initStore() {
   await db.collection('rooms').createIndex({ creatorKey: 1, createdAt: -1 }, { name: 'creator_rooms' });
   await db.collection('messages').createIndex({ roomId: 1, createdAt: 1 }, { name: 'room_history' });
   await db.collection('messages').createIndex({ createdAt: 1 }, { expireAfterSeconds: 2592000, name: 'delete_messages_after_30_days' });
+  await db.collection('geocodes').createIndex({ queryKey: 1 }, { unique: true, name: 'unique_geocode_query' });
 }
 
 const secretHash = (value, salt = randomBytes(16).toString('hex')) => `${salt}:${scryptSync(String(value), salt, 64).toString('hex')}`;
@@ -73,8 +74,17 @@ export async function accountExists(username) { return Boolean(await db.collecti
 export async function setAccountPresence(username, status) {
   const usernameKey = username.toLowerCase();
   const before = await db.collection('accounts').findOne({ usernameKey }, { projection: { presence: 1 } });
-  const now = new Date(); const account = await db.collection('accounts').findOneAndUpdate({ usernameKey }, { $set: { presence: status, online: status !== 'offline', lastSeen: now, ...(status === 'online' ? { lastActive: now } : {}) } }, { returnDocument: 'after', projection: { friends: 1, username: 1 } });
+  const now = new Date(); const update = { $set: { presence: status, online: status !== 'offline', lastSeen: now, ...(status === 'online' ? { lastActive: now } : {}) }, ...(status === 'offline' ? { $unset: { currentLocation: '' } } : {}) }; const account = await db.collection('accounts').findOneAndUpdate({ usernameKey }, update, { returnDocument: 'after', projection: { friends: 1, username: 1 } });
   return { friends: account?.friends || [], changed: before?.presence !== status };
+}
+export async function updateAccountLocation(username, location) {
+  const usernameKey = username.toLowerCase(); const account = await db.collection('accounts').findOneAndUpdate({ usernameKey }, { $set: { currentLocation: { ...location, updatedAt: new Date() } } }, { returnDocument: 'after', projection: { username: 1, friends: 1, currentLocation: 1 } });
+  return account ? { username: account.username, friends: account.friends || [], location: account.currentLocation } : null;
+}
+export async function clearAccountLocation(username) { await db.collection('accounts').updateOne({ usernameKey: username.toLowerCase() }, { $unset: { currentLocation: '' } }); }
+export async function getLiveLocations(username) {
+  const account = await db.collection('accounts').findOne({ usernameKey: username.toLowerCase() }); if (!account) return [];
+  return db.collection('accounts').find({ usernameKey: { $in: [account.usernameKey, ...(account.friends || [])] }, presence: { $ne: 'offline' }, currentLocation: { $exists: true } }, { projection: { _id: 0, username: 1, usernameKey: 1, presence: 1, currentLocation: 1 } }).toArray();
 }
 
 export async function getSocial(username) {
@@ -87,9 +97,12 @@ export async function getSocial(username) {
     db.collection('rooms').find({}, { projection: { _id: 0 } }).sort({ createdAt: -1 }).toArray()
   ]);
   const requesters = requests.length ? await db.collection('accounts').find({ usernameKey: { $in: requests.map((request) => request.from) } }, { projection: { _id: 0, passwordHash: 0, pinHash: 0 } }).toArray() : [];
-  const notifications = rooms.filter((room) => room.creatorKey !== usernameKey && room.members?.some((member) => member.key === usernameKey)).map((room) => ({ id: `invite-${room.id}-${usernameKey}`, type: 'room-invite', to: usernameKey, from: room.creatorKey, roomId: room.id, read: false, createdAt: room.createdAt }));
+  const dismissed = new Set(account.dismissedNotificationIds || []); const clearedAt = account.notificationsClearedAt ? new Date(account.notificationsClearedAt) : null;
+  const notifications = rooms.filter((room) => room.creatorKey !== usernameKey && room.members?.some((member) => member.key === usernameKey)).map((room) => ({ id: `invite-${room.id}-${usernameKey}`, type: 'room-invite', to: usernameKey, from: room.creatorKey, roomId: room.id, read: false, createdAt: room.createdAt })).filter((item) => !dismissed.has(item.id) && (!clearedAt || new Date(item.createdAt) > clearedAt));
   return { account: publicAccount(account), friends, requesters, requests, rooms, notifications };
 }
+export async function dismissNotification(username, id) { return (await db.collection('accounts').updateOne({ usernameKey: username.toLowerCase() }, { $addToSet: { dismissedNotificationIds: id } })).matchedCount > 0; }
+export async function clearNotifications(username) { return (await db.collection('accounts').updateOne({ usernameKey: username.toLowerCase() }, { $set: { notificationsClearedAt: new Date() } })).matchedCount > 0; }
 
 export async function createFriendRequest(from, to) {
   const [target, sender] = await Promise.all([db.collection('accounts').findOne({ usernameKey: to }), db.collection('accounts').findOne({ usernameKey: from })]);
@@ -157,6 +170,9 @@ export async function addPlan(plan) {
   else { const data = await readLocal(); data.plans.push(plan); await writeLocal(data); }
   return plan;
 }
+
+export async function getCachedGeocode(queryKey) { return db ? db.collection('geocodes').findOne({ queryKey }, { projection: { _id: 0 } }) : null; }
+export async function saveCachedGeocode(entry) { if (db) await db.collection('geocodes').updateOne({ queryKey: entry.queryKey }, { $set: entry }, { upsert: true }); return entry; }
 
 export async function updatePlan(id, changes) {
   if (db) {

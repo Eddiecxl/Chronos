@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import './styles.css';
 
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -32,8 +34,8 @@ const hashSecret = async (value) => {
 const presenceStatus = (account) => account?.presence || (account?.online ? 'online' : 'offline');
 const isRecentlyOnline = (account) => presenceStatus(account) === 'online';
 
-function Logo() {
-  return <div className="logo"><span className="logo-mark">C</span><span>CHRONOS</span></div>;
+function Logo({ onClick }) {
+  return <div className={`logo ${onClick ? 'logo-link' : ''}`} onClick={onClick} onKeyDown={(event) => { if (onClick && (event.key === 'Enter' || event.key === ' ')) onClick(); }} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} aria-label={onClick ? 'Go to Chronos home' : undefined}><span className="logo-mark">C</span><span>CHRONOS</span></div>;
 }
 
 function IntroSequence({ onComplete }) {
@@ -72,8 +74,15 @@ function IntroSequence({ onComplete }) {
   </div>;
 }
 
+function BackToTop() {
+  const [visible, setVisible] = useState(false);
+  const [progress, setProgress] = useState(0);
+  useEffect(() => { const update = () => { const max = document.documentElement.scrollHeight - window.innerHeight; setVisible(window.scrollY > 260); setProgress(max > 0 ? Math.min(100, window.scrollY / max * 100) : 0); }; update(); window.addEventListener('scroll', update, { passive: true }); window.addEventListener('resize', update); return () => { window.removeEventListener('scroll', update); window.removeEventListener('resize', update); }; }, []);
+  return <button className={`back-to-top ${visible ? 'visible' : ''}`} style={{ '--scroll-progress': `${progress * 3.6}deg` }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="Back to top"><span>↑</span><small>TOP</small></button>;
+}
+
 function Header({ page, setPage, username, logout }) {
-  return <header className="header"><Logo/><nav>
+  return <header className="header"><Logo onClick={() => setPage('home')}/><nav>
     <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>Overview</button>
     {username && <button className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}>Planner</button>}
     {username && <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}>Lobby</button>}
@@ -181,11 +190,13 @@ function SocialLobby({ username, social, updateSocial, onEnterRoom }) {
     updateSocial((current) => ({ ...current, notifications: current.notifications.map((item) => item.id === notification.id ? { ...item, read: true } : item) }));
     room ? onEnterRoom(room) : setNotice('That room is no longer live.');
   };
+  const dismissNotification = async (id) => { updateSocial((current) => ({ ...current, notifications: current.notifications.filter((item) => item.id !== id) })); await fetch(api(`/api/notifications/${encodeURIComponent(id)}?username=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => {}); };
+  const clearAllNotifications = async () => { updateSocial((current) => ({ ...current, notifications: [] })); await fetch(api(`/api/notifications?username=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => {}); };
   return <main className="lobby-page">
     <section className="lobby-hero"><div><div className="eyebrow"><span>✦</span> Chronos social lobby</div><h1>Your people.<br/><em>Perfectly in orbit.</em></h1><p>Approve your circle, see who is live, and gather everyone inside a room that waits for you.</p></div><div className="lobby-live-card"><i/><span>LOBBY LIVE</span><b>{friends.filter((friend) => friend.online).length + 1}</b><small>people online now</small></div></section>
     <section className="lobby-layout"><div className="friends-panel"><header><div><span>YOUR CIRCLE</span><h2>Friends</h2></div><b>{String(friends.length).padStart(2, '0')}</b></header><form className="add-friend-form" onSubmit={addFriend}><label>Find an account by username</label><div><input value={friendName} onChange={(event) => { setFriendName(event.target.value); setNotice(''); }} placeholder="Exact Chronos username"/><button className="gold-button">Send request <span>+</span></button></div>{notice && <small>{notice}</small>}</form><div className="friends-grid">{friends.map((friend) => <article className={friend.online ? 'is-online' : ''} key={friend.id}><button className={`friend-select ${selected.includes(friend.id) ? 'selected' : ''}`} onClick={() => setSelected((current) => current.includes(friend.id) ? current.filter((id) => id !== friend.id) : [...current, friend.id])}><span>{selected.includes(friend.id) ? '✓' : '+'}</span></button><button className="friend-remove" onClick={() => removeFriend(friend)} aria-label={`Remove ${friend.name}`}>×</button><div className="friend-avatar">{friend.name[0].toUpperCase()}<i/></div><div><h3>{friend.name}</h3><p><i/>{friend.online ? 'Online' : 'Offline'}</p></div><small>{friend.online ? 'AVAILABLE NOW' : 'AWAY'}</small></article>)}{!friends.length && <p className="circle-empty">Your circle is waiting for its first connection.</p>}</div></div>
       <aside className="room-builder"><span>PRIVATE ROOM / 01</span><h2>Create a room</h2><p>Select friends, open a room, and Chronos will deliver every invitation.</p><form onSubmit={createRoom}><label>Room name<input value={roomName} onChange={(event) => setRoomName(event.target.value)} placeholder={`${username}'s Room`}/></label><div className="invite-summary"><span>INVITED</span><b>{selected.length}</b><p>{selected.length ? friends.filter((friend) => selected.includes(friend.id)).map((friend) => friend.name).join(' · ') : 'Select friends from your circle'}</p></div><button className="gold-button room-create">Open room <span>↗</span></button></form><div className="room-sigil"><i/><b>C</b><i/></div></aside></section>
-    <section className="social-inbox"><header><div><span>SOCIAL INBOX</span><h2>Requests & invitations</h2><p>Every connection stays in your hands.</p></div><b>{String(requests.length + notifications.filter((item) => !item.read).length).padStart(2, '0')}</b></header><div className="inbox-grid"><div className="request-stack"><h3>FRIEND REQUESTS</h3>{requests.map((request) => <article key={request.id}><div className="inbox-avatar">{social.accounts[request.from]?.username[0]}</div><div><b>{social.accounts[request.from]?.username}</b><span>wants to join your circle</span></div><footer><button onClick={() => answerRequest(request, false)}>Reject</button><button className="approve" onClick={() => answerRequest(request, true)}>Approve</button></footer></article>)}{!requests.length && <p className="inbox-empty">No friend requests waiting.</p>}</div><div className="request-stack"><h3>NOTIFICATIONS</h3>{notifications.slice(0, 8).map((item) => <article className={item.read ? 'is-read' : ''} key={item.id}><div className="inbox-avatar">{social.accounts[item.from]?.username[0]}</div><div><b>{item.type === 'room-invite' ? `${social.accounts[item.from]?.username} invited you` : `${social.accounts[item.from]?.username} ${item.accepted ? 'accepted' : 'declined'}`}</b><span>{item.type === 'room-invite' ? social.rooms.find((room) => room.id === item.roomId)?.name || 'Room closed' : 'your friend request'}</span></div>{item.type === 'room-invite' && <footer><button className="approve" onClick={() => openInvite(item)}>View room</button></footer>}</article>)}{!notifications.length && <p className="inbox-empty">Your social signal is quiet.</p>}</div></div></section>
+    <section className="social-inbox"><header><div><span>SOCIAL INBOX</span><h2>Requests & invitations</h2><p>Every connection stays in your hands.</p></div><b>{String(requests.length + notifications.filter((item) => !item.read).length).padStart(2, '0')}</b></header><div className="inbox-grid"><div className="request-stack"><h3>FRIEND REQUESTS</h3>{requests.map((request) => <article key={request.id}><div className="inbox-avatar">{social.accounts[request.from]?.username[0]}</div><div><b>{social.accounts[request.from]?.username}</b><span>wants to join your circle</span></div><footer><button onClick={() => answerRequest(request, false)}>Reject</button><button className="approve" onClick={() => answerRequest(request, true)}>Approve</button></footer></article>)}{!requests.length && <p className="inbox-empty">No friend requests waiting.</p>}</div><div className="request-stack notification-stack"><div className="notification-stack-head"><h3>NOTIFICATIONS</h3>{notifications.length > 0 && <button onClick={clearAllNotifications}>Clear all</button>}</div>{notifications.slice(0, 8).map((item) => <article className={item.read ? 'is-read' : ''} key={item.id}><button className="notification-dismiss" onClick={() => dismissNotification(item.id)} aria-label="Dismiss notification">×</button><div className="inbox-avatar">{social.accounts[item.from]?.username?.[0]}</div><div><b>{item.type === 'room-invite' ? `${social.accounts[item.from]?.username || item.from} invited you` : `${social.accounts[item.from]?.username || item.from} ${item.accepted ? 'accepted' : 'declined'}`}</b><span>{item.type === 'room-invite' ? social.rooms.find((room) => room.id === item.roomId)?.name || 'Room closed' : 'your friend request'}</span></div>{item.type === 'room-invite' && <footer><button className="approve" onClick={() => openInvite(item)}>View room</button></footer>}</article>)}{!notifications.length && <p className="inbox-empty">Your social signal is quiet.</p>}</div></div></section>
     <section className="live-rooms"><header><div><span>LIVE ROOMS</span><h2>Spaces that stay open.</h2><p>Rooms remain until their creator closes them manually.</p></div><b>{String(social.rooms.length).padStart(2, '0')}</b></header><div className="live-room-grid">{social.rooms.map((item, index) => <article key={item.id}><div className="live-room-orbit"><i/><i/><b>{String(index + 1).padStart(2, '0')}</b></div><span><i/> LIVE ROOM</span><h3>{item.name}</h3><p>Created by <b>{item.creator}</b></p><div className="live-room-members"><span>{item.members.slice(0, 4).map((member) => <i key={member.id}>{member.name[0]}</i>)}</span><small>{item.members.length + 1} members</small></div><footer><button className="secondary-button" onClick={() => onEnterRoom(item)}>Enter room <span>→</span></button>{item.creatorKey === myKey && <button className="delete-room" onClick={() => deleteRoom(item.id)}>Delete</button>}</footer></article>)}{!social.rooms.length && <div className="rooms-empty"><span>NO LIVE SIGNALS</span><h3>Your first room can stay open as long as you need it.</h3></div>}</div></section>
   </main>;
 }
@@ -238,10 +249,13 @@ function Room({ room, username, onLeave }) {
   const [liveMembers, setLiveMembers] = useState([username]);
   const [typing, setTyping] = useState([]);
   const [roomNotice, setRoomNotice] = useState(null);
+  const [memberPresence, setMemberPresence] = useState({});
   const typingTimer = useRef(null);
   const isOwner = accountKey(username) === room.creatorKey;
   const markSeen = (item) => item.author !== username && fetch(api(`/api/rooms/${room.id}/messages/${item.id}/seen`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) }).catch(() => {});
   useEffect(() => { fetch(api(`/api/rooms/${room.id}/messages`)).then((response) => response.ok ? response.json() : []).then((items) => { setMessages(items); items.forEach(markSeen); }).catch(() => {}); }, [room.id]);
+  useEffect(() => { const load = () => fetch(api(`/api/social/${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : null).then((data) => { if (!data) return; const entries = [data.account, ...data.friends].map((account) => [accountKey(account.username), account.presence || (account.online ? 'online' : 'offline')]); setMemberPresence(Object.fromEntries(entries)); }).catch(() => {}); load(); const stream = new EventSource(api(`/api/events/${encodeURIComponent(username)}`)); stream.onmessage = (event) => { const signal = JSON.parse(event.data); if (signal.type === 'presence') load(); }; return () => stream.close(); }, [username]);
+  useEffect(() => { document.querySelectorAll('.room-members article').forEach((card) => { const name = card.querySelector('p b')?.textContent; if (!name) return; const globalStatus = memberPresence[accountKey(name)] || 'offline'; const inRoom = liveMembers.some((member) => accountKey(member) === accountKey(name)); const label = card.querySelector('p span'); if (label) { const host = accountKey(name) === room.creatorKey ? ' · Host' : ''; label.lastChild.textContent = `${globalStatus[0].toUpperCase()}${globalStatus.slice(1)} · ${inRoom ? 'In room' : 'Not in room'}${host}`; card.dataset.roomPresence = inRoom ? 'in-room' : 'not-in-room'; card.dataset.globalPresence = globalStatus; } }); }, [liveMembers, memberPresence]);
   useEffect(() => {
     const stream = new EventSource(api(`/api/rooms/${room.id}/events?username=${encodeURIComponent(username)}`));
     stream.onmessage = (event) => {
@@ -279,6 +293,8 @@ function AuthScreen({ social, updateSocial, onLogin }) {
       if (form.password.length < 6) return setError('Use at least 6 characters for your password.');
       if (!/^\d{3}$/.test(form.pin)) return setError('Your login PIN must be exactly 3 numbers.');
       try {
+        const availabilityResponse = await fetch(api(`/api/accounts/${encodeURIComponent(form.username.trim())}/exists`));
+        if (availabilityResponse.ok && (await availabilityResponse.json()).exists) return setError('That username is already registered. Choose another one.');
         const response = await fetch(api('/api/accounts/register'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.username.trim(), password: form.password, pin: form.pin }) });
         const result = await response.json(); if (!response.ok) return setError(result.error || 'Could not create account.');
         const next = { ...result, friends: result.friends || [], online: true, lastSeen: Date.now() };
@@ -303,10 +319,13 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
   const [friend, setFriend] = useState('');
   const [error, setError] = useState('');
   const [liveTime, setLiveTime] = useState(currentMalaysiaTime);
+  const [homePlans, setHomePlans] = useState([]);
   useEffect(() => {
     const timer = window.setInterval(() => setLiveTime(currentMalaysiaTime()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => { if (username) fetch(api(`/api/plans?username=${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : []).then(setHomePlans).catch(() => setHomePlans([])); }, [username]);
+  const upcomingPlans = useMemo(() => homePlans.filter((plan) => plan.date >= today()).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime)).slice(0, 8), [homePlans]);
   const submit = async (e) => {
     e.preventDefault();
     if (!name.trim()) return setError('Tell us what we should call you.');
@@ -332,12 +351,12 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
       </div>
       <div className="hero-visual" aria-label="Planner preview">
         <div className="chrono-halo"/><div className="clock-ticks"/><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="time-core"><i className="live-pulse"/><span>{liveTime}</span><small>MALAYSIA TIME</small></div>
-        <div className="float-card card-a"><span className="card-icon">◉</span><div><small>DEEP WORK</small><b>Design review</b></div><time>09:00</time></div>
-        <div className="float-card card-b"><span className="card-icon">◇</span><div><small>PERSONAL</small><b>Evening reset</b></div><time>19:30</time></div>
-        <div className="float-stat"><b>86%</b><span>day clarity</span></div>
+        <div className="hero-truth-card"><span>LIVE DATA</span><b>{username ? `${upcomingPlans.length} upcoming ${upcomingPlans.length === 1 ? 'plan' : 'plans'}` : 'Your time begins here'}</b><p>{username ? 'Your real schedule appears directly below.' : 'Sign in to synchronize your own plans.'}</p><i/></div>
+        <div className="hero-coordinate"><span>NO SAMPLE EVENTS</span><b>ONLY YOUR CHRONOS DATA</b></div>
         <div className="chrono-signature"><span>CHRONOS / 01</span><i/></div>
       </div>
     </section>
+    {username && <section className="home-live-plans"><header><div><span>LIVE PLANNING / NOW</span><h2>Your next moments.</h2><p>Today takes priority, then Chronos carries your focus forward.</p></div><button className="secondary-button" onClick={onOpenPlanner}>View full planner <span>→</span></button></header><div className="home-plan-stream">{upcomingPlans.map((plan, index) => { const urgent = plan.priority === 'High' || plan.priority === 'Emergency'; const dayLabel = plan.date === today() ? 'TODAY' : new Date(`${plan.date}T12:00:00`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase(); return <article className={urgent ? 'is-urgent' : ''} key={plan.id}><div className="home-plan-index">{String(index + 1).padStart(2, '0')}</div><div className="home-plan-date"><span>{dayLabel}</span><b>{plan.startTime === '00:00' && plan.endTime === '23:59' ? 'ALL DAY' : `${plan.startTime}–${plan.endTime}`}</b></div><div className="home-plan-copy"><small>{plan.category || 'PLAN'} · {plan.status || 'Busy'}</small><h3>{plan.title}</h3>{plan.notes && <p>{plan.notes}</p>}</div><div className={`home-priority priority-${(plan.priority || 'None').toLowerCase()}`}>{urgent && <i/>}{plan.priority && plan.priority !== 'None' ? plan.priority : 'No priority'}</div></article>})}{!upcomingPlans.length && <div className="home-plans-empty"><span>◇</span><h3>Your horizon is clear.</h3><p>No plans are scheduled from today onward.</p><button className="gold-button" onClick={onOpenPlanner}>Create your first plan <span>↗</span></button></div>}</div></section>}
     <div className="luxury-marquee" aria-hidden="true"><div><span>INTENTION</span><i>✦</i><span>CLARITY</span><i>✦</i><span>FOCUS</span><i>✦</i><span>CONNECTION</span><i>✦</i><span>INTENTION</span><i>✦</i><span>CLARITY</span><i>✦</i><span>FOCUS</span><i>✦</i><span>CONNECTION</span><i>✦</i></div></div>
     <section className="statement"><div className="statement-gem">C</div><span>THE CHRONOS METHOD</span><h2>Less scheduling.<br/>More <em>living on purpose.</em></h2><p>A refined view of the one resource you cannot replenish.</p><div className="statement-rule"><i/><span>EST. 2026</span><i/></div></section>
     <section className="features">
@@ -347,7 +366,7 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
 }
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: MALAYSIA_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const emptyForm = () => ({ title: '', date: today(), startTime: '20:00', endTime: '22:00', category: 'Gaming', status: 'Gaming', priority: 'Medium', notes: '', location: '' });
+const emptyForm = () => ({ title: '', date: today(), startTime: '00:00', endTime: '23:59', category: 'Personal', status: 'Busy', priority: 'None', notes: '', location: '' });
 const mins = (time) => Number(time.slice(0,2)) * 60 + Number(time.slice(3));
 const formatTime = (time) => new Date(`2000-01-01T${time}`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const shiftDate = (date, days) => new Date(new Date(`${date}T12:00:00+08:00`).getTime() + days * 86400000).toISOString().slice(0,10);
@@ -357,7 +376,7 @@ const currentMalaysiaMinutes = () => {
   return Number(parts.find((p) => p.type === 'hour')?.value || 0) * 60 + Number(parts.find((p) => p.type === 'minute')?.value || 0);
 };
 
-function PlanModal({ close, save, existing }) {
+function LegacyPlanModal({ close, save, existing }) {
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState('');
   const update = (key, value) => setForm({ ...form, [key]: value });
@@ -382,18 +401,71 @@ function PlanModal({ close, save, existing }) {
   </section></div>;
 }
 
+function PlanModal({ close, save, existing }) {
+  const [form, setForm] = useState(emptyForm());
+  const [advanced, setAdvanced] = useState(false);
+  const [error, setError] = useState('');
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const submit = (event) => { event.preventDefault(); if (!form.title.trim()) return setError('Give this plan a clear name.'); if (mins(form.endTime) <= mins(form.startTime)) return setError('End time must be later than start time.'); const conflict = existing.some((plan) => plan.date === form.date && mins(form.startTime) < mins(plan.endTime) && mins(form.endTime) > mins(plan.startTime)); if (conflict && !confirm('This overlaps another plan. Add it anyway?')) return; save({ ...form, title: form.title.trim() }); };
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && close()}><section className={`modal plan-composer ${advanced ? 'is-advanced' : 'is-simple'}`} role="dialog" aria-modal="true"><button className="modal-close" onClick={close}>×</button><div className="eyebrow"><span>✦</span> {advanced ? 'Advanced time architecture' : 'Quick plan'}</div><h2>{advanced ? 'Compose every detail.' : 'What needs your time?'}</h2><p>{advanced ? 'Shape timing, visibility, location, and context.' : 'Start simply. Today and the full day are already selected.'}</p><form onSubmit={submit}><label className="wide">Plan name<input autoFocus value={form.title} onChange={(event) => { update('title', event.target.value); setError(''); }} placeholder="e.g. Finish project proposal" maxLength="80"/></label><div className="simple-plan-grid"><label>Date<input type="date" value={form.date} onChange={(event) => update('date', event.target.value)}/></label><label>Priority<select value={form.priority} onChange={(event) => update('priority', event.target.value)}><option>None</option><option>Low</option><option>Medium</option><option>High</option><option>Emergency</option></select></label></div>{!advanced && <div className="all-day-note"><i/>Reserved as an all-day plan · 00:00–23:59 MYT</div>}{advanced && <div className="advanced-fields"><div className="form-grid"><label>Category<select value={form.category} onChange={(event) => update('category', event.target.value)}><option>Personal</option><option>Gaming</option><option>Focus</option><option>Meeting</option><option>Health</option><option>Learning</option></select></label><label>Visibility<select value={form.status} onChange={(event) => update('status', event.target.value)}><option>Busy</option><option>Free</option><option>Gaming</option></select></label><label>Starts (MYT)<input type="time" value={form.startTime} onChange={(event) => update('startTime', event.target.value)}/></label><label>Ends (MYT)<input type="time" value={form.endTime} onChange={(event) => update('endTime', event.target.value)}/></label></div><label>Location <span>(optional)</span><input value={form.location} onChange={(event) => update('location', event.target.value)} placeholder="e.g. Home, KLCC, Discord" maxLength="100"/></label><label>Notes <span>(optional)</span><textarea value={form.notes} onChange={(event) => update('notes', event.target.value)} placeholder="Add useful context…" maxLength="300"/></label></div>}{(form.priority === 'High' || form.priority === 'Emergency') && <div className="priority-alert"><i>!</i><div><b>{form.priority} priority</b><span>This plan will stand out across Chronos.</span></div></div>}{error && <div className="form-error">{error}</div>}<div className="composer-mode"><button type="button" className="advanced-toggle" onClick={() => setAdvanced((current) => !current)}><span>{advanced ? '−' : '+'}</span>{advanced ? 'Use simple planning' : 'Open advanced planning'}</button></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={close}>Cancel</button><button className="gold-button">Add to my day <span>↗</span></button></div></form></section></div>;
+}
+
+function PlanMapLegacy({ plans }) {
+  const elementRef = useRef(null); const mapRef = useRef(null); const markersRef = useRef(null);
+  useEffect(() => {
+    if (mapRef.current || !elementRef.current) return;
+    const map = L.map(elementRef.current, { zoomControl: false, minZoom: 2, maxZoom: 19, worldCopyJump: true }).setView([18, 20], 2);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+    markersRef.current = L.layerGroup().addTo(map); mapRef.current = map;
+    window.setTimeout(() => map.invalidateSize(), 100);
+    return () => { map.remove(); mapRef.current = null; };
+  }, []);
+  useEffect(() => {
+    const map = mapRef.current; const layer = markersRef.current; if (!map || !layer) return; layer.clearLayers();
+    const located = plans.filter((plan) => Number.isFinite(plan.latitude) && Number.isFinite(plan.longitude)); const points = [];
+    located.forEach((plan) => { const urgent = plan.priority === 'High' || plan.priority === 'Emergency'; const icon = L.divIcon({ className: 'chronos-map-icon-wrap', html: `<span class="chronos-map-pin${urgent ? ' urgent' : ''}"><i></i></span>`, iconSize: [32, 38], iconAnchor: [16, 34] }); const marker = L.marker([plan.latitude, plan.longitude], { icon }).addTo(layer); const popup = document.createElement('article'); popup.className = 'chronos-map-popup'; const kicker = document.createElement('span'); kicker.textContent = `${plan.category || 'PLAN'} · ${plan.startTime}–${plan.endTime}`; const title = document.createElement('b'); title.textContent = plan.title; const place = document.createElement('p'); place.textContent = plan.locationLabel || plan.location; popup.append(kicker, title, place); marker.bindPopup(popup, { closeButton: false, offset: [0, -23] }); points.push([plan.latitude, plan.longitude]); });
+    if (points.length === 1) map.flyTo(points[0], 16, { animate: true, duration: 1.2 }); else if (points.length > 1) map.fitBounds(L.latLngBounds(points).pad(.5), { maxZoom: 16, animate: true }); else map.setView([18, 20], 2, { animate: true });
+  }, [plans]);
+  const locatedCount = plans.filter((plan) => Number.isFinite(plan.latitude) && Number.isFinite(plan.longitude)).length;
+  return <section className="malaysia-map-section"><header><div><span>CHRONOS WORLD / LIVE GPS</span><h2>Your plans, exactly where you are.</h2><p>Zoom from the whole globe down to street level. Plan markers use your device location automatically.</p></div><b>{String(locatedCount).padStart(2, '0')} <small>LOCATED</small></b></header><div className="malaysia-map-shell"><div className="malaysia-map" ref={elementRef}/><div className="map-live-label"><i/><span>AUTOMATIC GPS</span><b>GLOBE TO STREET VIEW</b></div>{!locatedCount && <div className="map-empty-overlay"><span>⌖</span><b>No GPS plan for this day</b><p>Create a plan and allow location access. Chronos will place it automatically—no address entry required.</p></div>}</div><footer><span>GPS is requested only when you save a plan.</span><b>Map data © OpenStreetMap contributors</b></footer></section>;
+}
+
+function LiveUserGlobe({ username }) {
+  const elementRef = useRef(null); const mapRef = useRef(null); const markersRef = useRef(null); const centeredRef = useRef(false); const [locations, setLocations] = useState([]);
+  const loadLocations = () => fetch(api(`/api/live-locations/${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : []).then(setLocations).catch(() => {});
+  useEffect(() => { if (mapRef.current || !elementRef.current) return; const map = L.map(elementRef.current, { zoomControl: false, minZoom: 2, maxZoom: 19, worldCopyJump: true }).setView([18, 20], 2); L.control.zoom({ position: 'bottomright' }).addTo(map); L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map); markersRef.current = L.layerGroup().addTo(map); mapRef.current = map; setTimeout(() => map.invalidateSize(), 100); return () => { map.remove(); mapRef.current = null; }; }, []);
+  useEffect(() => { loadLocations(); const stream = new EventSource(api(`/api/events/${encodeURIComponent(username)}`)); stream.onmessage = (event) => { const signal = JSON.parse(event.data); if (['location', 'presence', 'friend-removed'].includes(signal.type)) loadLocations(); }; const timer = setInterval(loadLocations, 20000); return () => { stream.close(); clearInterval(timer); }; }, [username]);
+  useEffect(() => { const map = mapRef.current; const layer = markersRef.current; if (!map || !layer) return; layer.clearLayers(); const points = []; locations.forEach((account) => { const location = account.currentLocation; if (!location) return; const isMe = accountKey(account.username) === accountKey(username); const icon = L.divIcon({ className: 'chronos-map-icon-wrap', html: `<span class="chronos-map-pin user${isMe ? ' me' : ''}"><i></i></span>`, iconSize: [32,38], iconAnchor: [16,34] }); const marker = L.marker([location.latitude, location.longitude], { icon }).addTo(layer); const popup = document.createElement('article'); popup.className = 'chronos-map-popup'; const status = document.createElement('span'); status.textContent = `${account.presence?.toUpperCase() || 'ONLINE'} · LIVE GPS`; const title = document.createElement('b'); title.textContent = isMe ? `${account.username} · You` : account.username; const accuracy = document.createElement('p'); accuracy.textContent = location.accuracy ? `Accuracy approximately ±${Math.round(location.accuracy)} metres` : 'Live browser location'; popup.append(status,title,accuracy); marker.bindPopup(popup,{closeButton:false,offset:[0,-23]}); points.push([location.latitude,location.longitude]); }); if (!centeredRef.current && points.length) { centeredRef.current = true; points.length === 1 ? map.flyTo(points[0],16,{duration:1.3}) : map.fitBounds(L.latLngBounds(points).pad(.45),{maxZoom:15}); } }, [locations, username]);
+  const meVisible = locations.some((account) => accountKey(account.username) === accountKey(username));
+  return <section className="malaysia-map-section"><header><div><span>CHRONOS WORLD / LIVE PEOPLE</span><h2>Your presence on the globe.</h2><p>Your browser updates your GPS while Chronos is open. Approved online friends appear live too.</p></div><b>{String(locations.length).padStart(2,'0')} <small>LIVE</small></b></header><div className="malaysia-map-shell"><div className="malaysia-map" ref={elementRef}/><div className="map-live-label"><i/><span>LIVE GPS WATCH</span><b>GLOBE TO STREET LEVEL</b></div>{!meVisible && <div className="map-empty-overlay"><span>⌖</span><b>Waiting for location access</b><p>Allow browser location permission to place yourself on the globe. Tracking stops when Chronos closes or you log out.</p></div>}</div><footer><span>Visible only to you and approved friends while online.</span><b>Map data © OpenStreetMap contributors</b></footer></section>;
+}
+
+function FancyCalendar({ selected, onSelect, onClose }) {
+  const selectedDate = new Date(`${selected}T12:00:00`);
+  const [month, setMonth] = useState(() => new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1));
+  const year = month.getFullYear(); const monthIndex = month.getMonth();
+  const firstWeekday = new Date(year, monthIndex, 1).getDay();
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const previousMonthDays = new Date(year, monthIndex, 0).getDate();
+  const cells = Array.from({ length: 42 }, (_, index) => { const dayOffset = index - firstWeekday + 1; const date = dayOffset < 1 ? new Date(year, monthIndex - 1, previousMonthDays + dayOffset) : dayOffset > daysInMonth ? new Date(year, monthIndex + 1, dayOffset - daysInMonth) : new Date(year, monthIndex, dayOffset); const value = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; return { date, value, outside: date.getMonth() !== monthIndex }; });
+  return <div className="calendar-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="chrono-calendar" role="dialog" aria-modal="true" aria-label="Choose planning date"><header><div><span>CHRONOS CALENDAR</span><h2>{month.toLocaleDateString([], { month: 'long', year: 'numeric' })}</h2></div><button onClick={onClose}>×</button></header><div className="calendar-month-nav"><button onClick={() => setMonth(new Date(year, monthIndex - 1, 1))}>←</button><button className="calendar-today" onClick={() => { const now = new Date(); setMonth(new Date(now.getFullYear(), now.getMonth(), 1)); }}>Today</button><button onClick={() => setMonth(new Date(year, monthIndex + 1, 1))}>→</button></div><div className="calendar-weekdays">{['SUN','MON','TUE','WED','THU','FRI','SAT'].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-days">{cells.map(({ date, value, outside }) => { const isToday = value === today(); const isSelected = value === selected; return <button className={`${outside ? 'outside' : ''} ${isToday ? 'today' : ''} ${isSelected ? 'selected' : ''}`} onClick={() => { onSelect(value); onClose(); }} key={value}><span>{date.getDate()}</span>{isToday && <i/>}</button>; })}</div><footer><span>MYT · UTC+8</span><b>{new Date(`${selected}T12:00:00`).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</b></footer></section></div>;
+}
+
 function Planner({ username, viewOnly = false, onBack, compareUser = '' }) {
   const [plans, setPlans] = useState([]);
   const [comparePlans, setComparePlans] = useState([]);
   const [compareName, setCompareName] = useState(compareUser);
   const [compareInput, setCompareInput] = useState('');
   const [selectedDate, setSelectedDate] = useState(today());
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const [modal, setModal] = useState(false);
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
   useEffect(() => { fetch(api(`/api/plans?username=${encodeURIComponent(username)}`)).then((r) => r.ok ? r.json() : []).then(setPlans).catch(() => setPlans([])); }, [username]);
   useEffect(() => { if (compareUser) fetch(api(`/api/plans?username=${encodeURIComponent(compareUser)}`)).then((r) => r.ok ? r.json() : []).then(setComparePlans).catch(() => setComparePlans([])); }, [compareUser]);
+  useEffect(() => { document.querySelectorAll('.agenda-card').forEach((card) => { const plan = plans.find((item) => item.title === card.querySelector('h3')?.textContent); if (plan) card.dataset.priority = plan.priority || 'None'; }); }, [plans, selectedDate, filter, search]);
   const dayPlans = useMemo(() => plans.filter((p) => p.date === selectedDate && (filter === 'All' || p.category === filter) && p.title.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.startTime.localeCompare(b.startTime)), [plans, selectedDate, filter, search]);
   const fullDayPlans = plans.filter((p) => p.date === selectedDate).sort((a,b) => a.startTime.localeCompare(b.startTime));
   const compareDayPlans = comparePlans.filter((p) => p.date === selectedDate).sort((a,b) => a.startTime.localeCompare(b.startTime));
@@ -432,7 +504,7 @@ function Planner({ username, viewOnly = false, onBack, compareUser = '' }) {
   return <main className="planner-page">
     <section className="planner-head"><div><div className="eyebrow"><span>{Icons.spark}</span> {viewOnly ? 'Friend availability' : 'Your time command'} <b className="timezone-pill">MYT · UTC+8</b></div><h1>{viewOnly ? <>Viewing <em>{username}.</em></> : <>Good day, <em>{username}.</em></>}</h1><p>{viewOnly ? `See ${username}'s entire day at once—and where your free time aligns.` : 'Your whole day, one Orbit. Compare schedules without calendar clutter.'}</p></div><div className="head-actions">{viewOnly ? <button className="secondary-button" onClick={onBack}>← My planner</button> : <><button className="secondary-button share-button" onClick={copyShare}>Share with friends {Icons.arrow}</button><button className="gold-button add-main" onClick={() => setModal(true)}><span>{Icons.plus}</span> New plan</button></>}</div></section>
     <section className="metrics"><article><span>PLANNED TIME</span><b>{Math.floor(focused/60)}<small>h</small> {focused%60}<small>m</small></b><i>across {fullDayPlans.length} blocks</i></article><article><span>{viewOnly ? 'GAMING BLOCKS' : 'COMPLETED'}</span><b>{viewOnly ? fullDayPlans.filter((p)=>p.status === 'Gaming').length : completed}<small>{viewOnly ? '' : ` / ${fullDayPlans.length}`}</small></b><i>{viewOnly ? 'ready to squad up' : `${fullDayPlans.length ? Math.round(completed/fullDayPlans.length*100) : 0}% of your day`}</i></article><article><span>UNPLANNED HOURS</span><b>{Math.max(0,24-Math.round(focused/60))}<small>h</small></b><i>potential free time</i></article><article className="availability-legend"><span><i className="dot-free"/>Free</span><span><i className="dot-busy"/>Busy</span><span><i className="dot-gaming"/>Gaming</span></article></section>
-    <section className="planner-tools"><div className="date-control"><button onClick={() => setSelectedDate(shiftDate(selectedDate,-1))}>‹</button><label><span>{Icons.calendar}</span><input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)}/><b>{dateLabel}</b></label><button onClick={() => setSelectedDate(shiftDate(selectedDate,1))}>›</button></div><div className="search-filter"><input aria-label="Search plans" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search plans…"/><select aria-label="Filter category" value={filter} onChange={(e)=>setFilter(e.target.value)}><option>All</option><option>Gaming</option><option>Focus</option><option>Meeting</option><option>Personal</option><option>Health</option><option>Learning</option></select></div></section>
+    <section className="planner-tools"><div className="date-control"><button className="date-step" onClick={() => setSelectedDate(shiftDate(selectedDate,-1))} aria-label="Previous day">‹</button><button className="date-display" onClick={() => setCalendarOpen(true)} aria-label="Open calendar"><span>{Icons.calendar}</span><b>{dateLabel}</b><small>{selectedDate}</small></button><button className="date-step" onClick={() => setSelectedDate(shiftDate(selectedDate,1))} aria-label="Next day">›</button></div><div className="search-filter"><input aria-label="Search plans" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Search plans…"/><select aria-label="Filter category" value={filter} onChange={(e)=>setFilter(e.target.value)}><option>All</option><option>Gaming</option><option>Focus</option><option>Meeting</option><option>Personal</option><option>Health</option><option>Learning</option></select></div></section>
     <section className="orbit-console">
       <div className="orbit-console-head"><div><span className="orbit-kicker">CHRONOS ORBIT / 24H</span><h2>Every hour. One glance.</h2></div>{!viewOnly && <form className="compare-form" onSubmit={loadComparison}><input aria-label="Compare friend" value={compareInput} onChange={(e)=>setCompareInput(e.target.value)} placeholder="Friend's Chronos name"/><button>Compare orbit <span>+</span></button></form>}{compareName && <div className="shared-window"><div><span>BEST SHARED NIGHT WINDOW</span><b>{sharedWindow} <small>MYT</small></b></div><button className="remove-orbit" onClick={removeComparison} aria-label={`Remove ${compareName}'s Orbit`}>{viewOnly ? 'Hide my Orbit' : 'Remove Orbit'} <i>×</i></button></div>}</div>
       <div className="orbit-ruler"><span/><div>{Array.from({length:9},(_,i)=><b key={i}>{String(i*3).padStart(2,'0')}</b>)}</div></div>
@@ -441,11 +513,11 @@ function Planner({ username, viewOnly = false, onBack, compareUser = '' }) {
     </section>
     <section className="agenda-section"><div className="agenda-heading"><div><span>DAY DETAILS</span><h2>{dayPlans.length ? `${dayPlans.length} moments in focus` : 'An open day'}</h2></div><i>{dateLabel}</i></div><div className="agenda-grid">{dayPlans.map((plan)=>{const status=(plan.status||'Busy').toLowerCase();return <article className={`agenda-card status-${status} ${plan.completed?'done':''}`} key={plan.id}><div className="agenda-time"><b>{plan.startTime}</b><i/><span>{plan.endTime}</span></div><div className="agenda-copy"><span>{plan.status||'Busy'} · {plan.category}</span><h3>{plan.title}</h3><p>{plan.notes||'No additional notes'}</p></div>{!viewOnly&&<div className="agenda-actions"><button onClick={()=>toggle(plan)}>{plan.completed?'Completed':'Mark done'}</button><button aria-label={`Delete ${plan.title}`} onClick={()=>remove(plan.id)}>×</button></div>}</article>})}{!dayPlans.length&&<div className="agenda-empty"><span>{Icons.clock}</span><h3>{viewOnly ? 'Nothing shared for this date.' : 'Your Orbit is clear.'}</h3><p>{viewOnly ? `${username} has no visible blocks here.` : 'A rare luxury: time with no claims on it.'}</p>{!viewOnly&&<button className="secondary-button" onClick={()=>setModal(true)}>Compose a plan</button>}</div>}</div></section>
     <section className="world-section"><div className="world-heading"><div><span>CHRONOS WORLD / PLACES</span><h2>Where your time will take you.</h2><p>Every plan becomes a point in your world.</p></div><b>{String(worldPlans.length).padStart(2,'0')} <small>LOCATIONS</small></b></div><div className="world-stage"><div className="chrono-globe" aria-hidden="true"><div className="globe-aura"/><div className="globe-sphere"><i className="longitude long-a"/><i className="longitude long-b"/><i className="longitude long-c"/><i className="latitude lat-a"/><i className="latitude lat-b"/><i className="latitude lat-c"/><span className="globe-shine"/></div><div className="globe-ring ring-a"/><div className="globe-ring ring-b"/></div><div className="world-flags">{worldPlans.map((plan,index)=>{const point=globePositions[index];return <article className={`world-flag ${index%2?'card-left':'card-right'}`} style={{left:`${point.x}%`,top:`${point.y}%`,'--flag-delay':`${index*-.7}s`}} key={plan.id}><div className="flag-pin"><i/><span>{index+1}</span></div><div className="world-card"><span>{plan.status||'Busy'} · {plan.category}</span><h3>{plan.title}</h3><p><b>{plan.date}</b><i>{plan.startTime}–{plan.endTime} MYT</i></p><footer>⌖ {plan.location||'Location to be decided'}</footer></div></article>})}</div>{!worldPlans.length&&<div className="world-empty"><span>⌖</span><b>No flags placed yet</b><p>Add a plan with a location to mark your world.</p></div>}</div>{fullDayPlans.length>worldPlans.length&&<p className="world-more">Showing the first {worldPlans.length} of {fullDayPlans.length} plans on the globe.</p>}</section>
-    {modal && !viewOnly && <PlanModal close={()=>setModal(false)} save={add} existing={plans}/>} {toast && <div className="toast"><span>{Icons.check}</span>{toast}</div>}
+    <LiveUserGlobe username={username}/> {calendarOpen && <FancyCalendar selected={selectedDate} onSelect={setSelectedDate} onClose={() => setCalendarOpen(false)}/>} {modal && !viewOnly && <PlanModal close={()=>setModal(false)} save={add} existing={plans}/>} {toast && <div className="toast"><span>{Icons.check}</span>{toast}</div>}
   </main>;
 }
 
-function Footer() { return <footer><Logo/><p>Make time feel like yours again.</p><span>© 2026 Chronos</span></footer>; }
+function Footer() { return <><BackToTop/><footer><Logo/><p>Make time feel like yours again.</p><span>© 2026 Chronos</span></footer></>; }
 
 function App() {
   const [showIntro, setShowIntro] = useState(true);
@@ -458,6 +530,7 @@ function App() {
   const [liveNotice, setLiveNotice] = useState(null);
   const idleTimer = useRef(null);
   const lastPresencePing = useRef(0);
+  const lastLocationPing = useRef(0);
   const setPage = (next) => { setPageState(next); if (next === 'lobby' && liveNotice) window.setTimeout(() => document.querySelector(liveNotice.type === 'room-invite' ? '.live-rooms' : '.social-inbox')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 180); };
   const updateSocial = (update) => setSocial((current) => { const next = typeof update === 'function' ? update(current) : update; localStorage.setItem(SOCIAL_KEY, JSON.stringify(next)); return next; });
   const syncSocial = () => {
@@ -482,13 +555,31 @@ function App() {
     return () => { clearTimeout(idleTimer.current); events.forEach((name) => window.removeEventListener(name, active)); document.removeEventListener('visibilitychange', active); };
   }, [username]);
   useEffect(() => {
+    if (!username || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition((position) => { if (Date.now() - lastLocationPing.current < 8000) return; lastLocationPing.current = Date.now(); fetch(api('/api/live-location'), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy }) }).catch(() => {}); }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [username]);
+  useEffect(() => {
     if (!username) return;
     syncSocial(); const timer = window.setInterval(syncSocial, 15000); return () => window.clearInterval(timer);
   }, [username]);
   useEffect(() => {
     if (!username) return;
     const stream = new EventSource(api(`/api/events/${encodeURIComponent(username)}`));
-    stream.onmessage = (event) => { const signal = JSON.parse(event.data); if (signal.type === 'connected') return; syncSocial(); if (signal.type === 'presence') return; const copy = signal.type === 'friend-request' ? `${signal.payload.from} sent you a friend request.` : signal.type === 'room-invite' ? `${signal.payload.from} invited you to ${signal.payload.roomName}.` : signal.type === 'friend-response' ? `${signal.payload.from} ${signal.payload.accepted ? 'accepted' : 'declined'} your request.` : signal.type === 'friend-removed' ? `${signal.payload.by} removed you from their circle.` : signal.type === 'room-deleted' ? `${signal.payload.by} deleted ${signal.payload.roomName}.` : signal.type === 'member-kicked' ? `${signal.payload.by} removed you from a room.` : 'Your Chronos circle just changed.'; setLiveNotice({ ...signal, copy }); };
+    stream.onmessage = (event) => {
+      const signal = JSON.parse(event.data);
+      if (signal.type === 'connected') return;
+      syncSocial();
+      const payload = signal.payload || {};
+      const copy = signal.type === 'friend-request' ? `${payload.from} sent you a friend request.`
+        : signal.type === 'room-invite' ? `${payload.from} invited you to ${payload.roomName}.`
+        : signal.type === 'friend-response' ? `${payload.from} ${payload.accepted ? 'accepted' : 'declined'} your request.`
+        : signal.type === 'friend-removed' ? `${payload.by} removed you from their circle.`
+        : signal.type === 'room-deleted' ? `${payload.by} deleted ${payload.roomName}.`
+        : signal.type === 'member-kicked' ? `${payload.by} removed you from a room.`
+        : null;
+      if (copy) setLiveNotice({ ...signal, copy });
+    };
     return () => stream.close();
   }, [username]);
   useEffect(() => { const sync = (event) => { if (event.key === SOCIAL_KEY) setSocial(readSocial()); }; window.addEventListener('storage', sync); return () => window.removeEventListener('storage', sync); }, []);

@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "concurrently \"vite\" \"node --env-file-if-exists=.env --watch server/index.js\"",
     "build": "vite build",
@@ -12,6 +13,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^5.1.0",
+    "leaflet": "^1.9.4",
     "mongodb": "^6.20.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
@@ -22,6 +24,6 @@
     "vite": "^7.1.4"
   },
   "engines": {
-    "node": ">=20"
+    "node": "22.x"
   }
 }
