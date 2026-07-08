@@ -34,6 +34,50 @@ const hashSecret = async (value) => {
 const presenceStatus = (account) => account?.presence || (account?.online ? 'online' : 'offline');
 const isRecentlyOnline = (account) => presenceStatus(account) === 'online';
 
+const dialogSubscribers = new Set();
+const openChronosDialog = (options) => new Promise((resolve) => {
+  dialogSubscribers.forEach((subscriber) => subscriber({ ...options, resolve }));
+});
+const chronosConfirm = (options) => openChronosDialog({ tone: 'danger', confirmLabel: 'Confirm', cancelLabel: 'Cancel', ...options });
+const chronosNotice = (options) => openChronosDialog({ tone: 'notice', confirmLabel: 'Continue', ...options });
+
+function ChronosDialogHost() {
+  const [queue, setQueue] = useState([]);
+  const active = queue[0];
+  useEffect(() => {
+    const receive = (request) => setQueue((current) => [...current, request]);
+    dialogSubscribers.add(receive);
+    return () => dialogSubscribers.delete(receive);
+  }, []);
+  useEffect(() => {
+    if (!active) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape' && active.cancelLabel) finish(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [active]);
+  const finish = (answer) => {
+    if (!active) return;
+    active.resolve(answer);
+    setQueue((current) => current.slice(1));
+  };
+  if (!active) return null;
+  return <div className="chronos-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && active.cancelLabel) finish(false); }}>
+    <section className="chronos-dialog" data-tone={active.tone || 'notice'} role="alertdialog" aria-modal="true" aria-labelledby="chronos-dialog-title" aria-describedby="chronos-dialog-message">
+      <div className="chronos-dialog-orbit"><i/><i/><b>C</b></div>
+      <span className="chronos-dialog-kicker">CHRONOS · CONFIRMATION</span>
+      <div className="chronos-dialog-symbol">{active.tone === 'danger' ? '!' : 'C'}</div>
+      <h2 id="chronos-dialog-title">{active.title || 'Are you sure?'}</h2>
+      <p id="chronos-dialog-message">{active.message}</p>
+      <footer>
+        {active.cancelLabel && <button className="chronos-dialog-cancel" onClick={() => finish(false)}>{active.cancelLabel}</button>}
+        <button className="chronos-dialog-confirm" onClick={() => finish(true)} autoFocus>{active.confirmLabel}</button>
+      </footer>
+    </section>
+  </div>;
+}
+
 function Logo({ onClick }) {
   return <div className={`logo ${onClick ? 'logo-link' : ''}`} onClick={onClick} onKeyDown={(event) => { if (onClick && (event.key === 'Enter' || event.key === ' ')) onClick(); }} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} aria-label={onClick ? 'Go to Chronos home' : undefined}><span className="logo-mark">C</span><span>CHRONOS</span></div>;
 }
@@ -118,8 +162,8 @@ function Lobby({ username, friends, setFriends, rooms, setRooms, onEnterRoom }) 
     setRooms((current) => [nextRoom, ...current]);
     onEnterRoom(nextRoom);
   };
-  const deleteRoom = (id) => {
-    if (!confirm('Delete this room permanently?')) return;
+  const deleteRoom = async (id) => {
+    if (!(await chronosConfirm({ title: 'Delete this room?', message: 'This permanently closes the room for everyone and cannot be undone.', confirmLabel: 'Delete room' }))) return;
     setRooms((current) => current.filter((item) => item.id !== id));
   };
   return <main className="lobby-page">
@@ -174,12 +218,12 @@ function SocialLobby({ username, social, updateSocial, onEnterRoom }) {
     onEnterRoom(room);
   };
   const deleteRoom = async (id) => {
-    if (!confirm('Delete this room permanently?')) return;
+    if (!(await chronosConfirm({ title: 'Delete this room?', message: 'This permanently closes the room for everyone and cannot be undone.', confirmLabel: 'Delete room' }))) return;
     const response = await fetch(api(`/api/rooms/${id}?creator=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => null); if (!response?.ok) return setNotice('Only the creator can delete this room.');
     updateSocial((current) => ({ ...current, rooms: current.rooms.filter((room) => room.id !== id), notifications: current.notifications.filter((item) => item.roomId !== id) }));
   };
   const removeFriend = async (friend) => {
-    if (!confirm(`Remove ${friend.name} from your circle?`)) return;
+    if (!(await chronosConfirm({ title: `Remove ${friend.name}?`, message: `${friend.name} will leave your Chronos circle and both of you will be notified.`, confirmLabel: 'Remove friend' }))) return;
     const response = await fetch(api(`/api/friends/${encodeURIComponent(friend.name)}?username=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => null);
     if (!response?.ok) return setNotice('Could not remove that friend.');
     updateSocial((current) => ({ ...current, accounts: { ...current.accounts, [myKey]: { ...current.accounts[myKey], friends: (current.accounts[myKey].friends || []).filter((key) => key !== friend.key) } } }));
@@ -258,7 +302,7 @@ function Room({ room, username, onLeave }) {
   useEffect(() => { document.querySelectorAll('.room-members article').forEach((card) => { const name = card.querySelector('p b')?.textContent; if (!name) return; const globalStatus = memberPresence[accountKey(name)] || 'offline'; const inRoom = liveMembers.some((member) => accountKey(member) === accountKey(name)); const label = card.querySelector('p span'); if (label) { const host = accountKey(name) === room.creatorKey ? ' · Host' : ''; label.lastChild.textContent = `${globalStatus[0].toUpperCase()}${globalStatus.slice(1)} · ${inRoom ? 'In room' : 'Not in room'}${host}`; card.dataset.roomPresence = inRoom ? 'in-room' : 'not-in-room'; card.dataset.globalPresence = globalStatus; } }); }, [liveMembers, memberPresence]);
   useEffect(() => {
     const stream = new EventSource(api(`/api/rooms/${room.id}/events?username=${encodeURIComponent(username)}`));
-    stream.onmessage = (event) => {
+    stream.onmessage = async (event) => {
       const signal = JSON.parse(event.data); const payload = signal.payload || {};
       if (payload.members) setLiveMembers(payload.members);
       if (signal.type === 'room-message' && payload.author !== username) { setMessages((current) => current.some((item) => item.id === payload.id) ? current : [...current, payload]); markSeen(payload); }
@@ -266,14 +310,14 @@ function Room({ room, username, onLeave }) {
       if (signal.type === 'typing' && payload.username !== username) setTyping((current) => payload.typing ? [...new Set([...current, payload.username])] : current.filter((name) => name !== payload.username));
       if (signal.type === 'member-joined') setRoomNotice(`${payload.username} joined ${room.name}`);
       if (signal.type === 'member-left' || signal.type === 'member-removed') setRoomNotice(`${payload.username} left ${room.name}`);
-      if (signal.type === 'room-deleted') { alert(`${payload.by} deleted ${payload.roomName}. The room is now closed.`); onLeave(); }
-      if (signal.type === 'member-kicked' && accountKey(payload.username) === accountKey(username)) { alert(`You were removed from ${room.name} by ${payload.by}.`); onLeave(); }
+      if (signal.type === 'room-deleted') { await chronosNotice({ title: 'Room closed', message: `${payload.by} deleted ${payload.roomName}. The room is no longer available.`, confirmLabel: 'Return to lobby' }); onLeave(); }
+      if (signal.type === 'member-kicked' && accountKey(payload.username) === accountKey(username)) { await chronosNotice({ title: 'You were removed', message: `${payload.by} removed you from ${room.name}.`, confirmLabel: 'Return to lobby' }); onLeave(); }
     };
     return () => { stream.close(); clearTimeout(typingTimer.current); };
   }, [room.id, username]);
   const changeMessage = (value) => { setMessage(value); fetch(api(`/api/rooms/${room.id}/typing`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, typing: Boolean(value.trim()) }) }).catch(() => {}); clearTimeout(typingTimer.current); typingTimer.current = setTimeout(() => fetch(api(`/api/rooms/${room.id}/typing`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, typing: false }) }).catch(() => {}), 1300); };
   const send = async (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; changeMessage(''); const response = await fetch(api(`/api/rooms/${room.id}/messages`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: username, text }) }).catch(() => null); if (response?.ok) { const saved = await response.json(); setMessages((current) => [...current, saved]); } };
-  const kick = async (name) => { if (!confirm(`Remove ${name} from ${room.name}?`)) return; const response = await fetch(api(`/api/rooms/${room.id}/members/${encodeURIComponent(name)}?creator=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => null); if (!response?.ok) return setRoomNotice('Only the room owner can remove members.'); setLiveMembers((current) => current.filter((member) => member !== name)); };
+  const kick = async (name) => { if (!(await chronosConfirm({ title: `Remove ${name}?`, message: `${name} will be removed from ${room.name} immediately.`, confirmLabel: 'Remove member' }))) return; const response = await fetch(api(`/api/rooms/${room.id}/members/${encodeURIComponent(name)}?creator=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => null); if (!response?.ok) return setRoomNotice('Only the room owner can remove members.'); setLiveMembers((current) => current.filter((member) => member !== name)); };
   if (welcoming) return <RoomWelcome room={room} onComplete={() => setWelcoming(false)}/>;
   const invited = room.members || [];
   return <main className="room-page"><section className="room-head"><button className="secondary-button" onClick={onLeave}>← Lobby</button><div><span>CHRONOS PRIVATE ROOM</span><h1>{room.name}</h1><p><i/> Room active · {liveMembers.length} live now</p></div><button className="gold-button" onClick={() => navigator.clipboard?.writeText(window.location.href)}>Copy invite <span>↗</span></button></section><section className="room-layout"><div className="room-conversation"><header><span>ROOM SIGNAL</span><b>LIVE</b></header><div className="message-stream">{messages.map((item) => { const receipts = (item.seenBy || []).filter((seen) => seen.username !== username); return <article key={item.id} className={item.author === username ? 'my-message' : 'their-message'}><div>{item.author[0].toUpperCase()}</div><p><b>{item.author === username ? 'You' : item.author}</b><span>{item.text}</span>{item.author === username && <small className="read-receipt">{receipts.length ? `Seen by ${receipts.map((seen) => seen.username).join(', ')} · ${new Date(receipts.at(-1).seenAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Sent · not seen yet'}</small>}</p><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></article>})}{!messages.length && <div className="room-chat-empty"><span>✦</span><b>No messages yet</b><p>Start the room conversation.</p></div>}</div><div className={`typing-signal ${typing.length ? 'visible' : ''}`}><i/><span>{typing.length === 1 ? `${typing[0]} is typing` : typing.length ? `${typing.join(', ')} are typing` : 'No one is typing'}</span><b/><b/><b/></div><form onSubmit={send}><input value={message} onChange={(event) => changeMessage(event.target.value)} placeholder="Write to the room…"/><button className="gold-button">Send <span>↗</span></button></form></div><aside className="room-members"><header><span>LIVE MEMBERS</span><b>{String(liveMembers.length).padStart(2, '0')}</b></header>{liveMembers.map((name) => <article className="is-online" key={name}><div>{name[0].toUpperCase()}</div><p><b>{name}</b><span><i/>Online {accountKey(name) === room.creatorKey ? '· Host' : ''}</span></p>{isOwner && accountKey(name) !== room.creatorKey && <button onClick={() => kick(name)} title={`Remove ${name}`}>×</button>}</article>)}{invited.filter((friend) => !liveMembers.includes(friend.name)).map((friend) => <article key={friend.id}><div>{friend.name[0].toUpperCase()}</div><p><b>{friend.name}</b><span><i/>Invited · Offline</span></p>{isOwner && <button onClick={() => kick(friend.name)} title={`Remove ${friend.name}`}>×</button>}</article>)}</aside></section>{roomNotice && <button className="room-live-notice" onClick={() => setRoomNotice(null)}><i/><span><small>ROOM UPDATE</small><b>{roomNotice}</b></span><strong>×</strong></button>}</main>;
@@ -380,12 +424,12 @@ function LegacyPlanModal({ close, save, existing }) {
   const [form, setForm] = useState(emptyForm());
   const [error, setError] = useState('');
   const update = (key, value) => setForm({ ...form, [key]: value });
-  const submit = (e) => {
+  const submit = async (e) => {
     e.preventDefault();
     if (!form.title.trim()) return setError('Give this plan a name.');
     if (mins(form.endTime) <= mins(form.startTime)) return setError('End time must be later than start time.');
     const conflict = existing.some((p) => p.date === form.date && mins(form.startTime) < mins(p.endTime) && mins(form.endTime) > mins(p.startTime));
-    if (conflict && !confirm('This overlaps another plan. Add it anyway?')) return;
+    if (conflict && !(await chronosConfirm({ tone: 'warning', title: 'Schedule overlap', message: 'This time overlaps another plan. Do you still want to add it?', confirmLabel: 'Add anyway' }))) return;
     save({ ...form, title: form.title.trim() });
   };
   return <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}><section className="modal" role="dialog" aria-modal="true">
@@ -406,7 +450,7 @@ function PlanModal({ close, save, existing }) {
   const [advanced, setAdvanced] = useState(false);
   const [error, setError] = useState('');
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
-  const submit = (event) => { event.preventDefault(); if (!form.title.trim()) return setError('Give this plan a clear name.'); if (mins(form.endTime) <= mins(form.startTime)) return setError('End time must be later than start time.'); const conflict = existing.some((plan) => plan.date === form.date && mins(form.startTime) < mins(plan.endTime) && mins(form.endTime) > mins(plan.startTime)); if (conflict && !confirm('This overlaps another plan. Add it anyway?')) return; save({ ...form, title: form.title.trim() }); };
+  const submit = async (event) => { event.preventDefault(); if (!form.title.trim()) return setError('Give this plan a clear name.'); if (mins(form.endTime) <= mins(form.startTime)) return setError('End time must be later than start time.'); const conflict = existing.some((plan) => plan.date === form.date && mins(form.startTime) < mins(plan.endTime) && mins(form.endTime) > mins(plan.startTime)); if (conflict && !(await chronosConfirm({ tone: 'warning', title: 'Schedule overlap', message: 'This time overlaps another plan. Do you still want to add it?', confirmLabel: 'Add anyway' }))) return; save({ ...form, title: form.title.trim() }); };
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && close()}><section className={`modal plan-composer ${advanced ? 'is-advanced' : 'is-simple'}`} role="dialog" aria-modal="true"><button className="modal-close" onClick={close}>×</button><div className="eyebrow"><span>✦</span> {advanced ? 'Advanced time architecture' : 'Quick plan'}</div><h2>{advanced ? 'Compose every detail.' : 'What needs your time?'}</h2><p>{advanced ? 'Shape timing, visibility, location, and context.' : 'Start simply. Today and the full day are already selected.'}</p><form onSubmit={submit}><label className="wide">Plan name<input autoFocus value={form.title} onChange={(event) => { update('title', event.target.value); setError(''); }} placeholder="e.g. Finish project proposal" maxLength="80"/></label><div className="simple-plan-grid"><label>Date<input type="date" value={form.date} onChange={(event) => update('date', event.target.value)}/></label><label>Priority<select value={form.priority} onChange={(event) => update('priority', event.target.value)}><option>None</option><option>Low</option><option>Medium</option><option>High</option><option>Emergency</option></select></label></div>{!advanced && <div className="all-day-note"><i/>Reserved as an all-day plan · 00:00–23:59 MYT</div>}{advanced && <div className="advanced-fields"><div className="form-grid"><label>Category<select value={form.category} onChange={(event) => update('category', event.target.value)}><option>Personal</option><option>Gaming</option><option>Focus</option><option>Meeting</option><option>Health</option><option>Learning</option></select></label><label>Visibility<select value={form.status} onChange={(event) => update('status', event.target.value)}><option>Busy</option><option>Free</option><option>Gaming</option></select></label><label>Starts (MYT)<input type="time" value={form.startTime} onChange={(event) => update('startTime', event.target.value)}/></label><label>Ends (MYT)<input type="time" value={form.endTime} onChange={(event) => update('endTime', event.target.value)}/></label></div><label>Location <span>(optional)</span><input value={form.location} onChange={(event) => update('location', event.target.value)} placeholder="e.g. Home, KLCC, Discord" maxLength="100"/></label><label>Notes <span>(optional)</span><textarea value={form.notes} onChange={(event) => update('notes', event.target.value)} placeholder="Add useful context…" maxLength="300"/></label></div>}{(form.priority === 'High' || form.priority === 'Emergency') && <div className="priority-alert"><i>!</i><div><b>{form.priority} priority</b><span>This plan will stand out across Chronos.</span></div></div>}{error && <div className="form-error">{error}</div>}<div className="composer-mode"><button type="button" className="advanced-toggle" onClick={() => setAdvanced((current) => !current)}><span>{advanced ? '−' : '+'}</span>{advanced ? 'Use simple planning' : 'Open advanced planning'}</button></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={close}>Cancel</button><button className="gold-button">Add to my day <span>↗</span></button></div></form></section></div>;
 }
 
@@ -436,9 +480,21 @@ function LiveUserGlobe({ username }) {
   const loadLocations = () => fetch(api(`/api/live-locations/${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : []).then(setLocations).catch(() => {});
   useEffect(() => { if (mapRef.current || !elementRef.current) return; const map = L.map(elementRef.current, { zoomControl: false, minZoom: 2, maxZoom: 19, worldCopyJump: true }).setView([18, 20], 2); L.control.zoom({ position: 'bottomright' }).addTo(map); L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map); markersRef.current = L.layerGroup().addTo(map); mapRef.current = map; setTimeout(() => map.invalidateSize(), 100); return () => { map.remove(); mapRef.current = null; }; }, []);
   useEffect(() => { loadLocations(); const stream = new EventSource(api(`/api/events/${encodeURIComponent(username)}`)); stream.onmessage = (event) => { const signal = JSON.parse(event.data); if (['location', 'presence', 'friend-removed'].includes(signal.type)) loadLocations(); }; const timer = setInterval(loadLocations, 20000); return () => { stream.close(); clearInterval(timer); }; }, [username]);
-  useEffect(() => { const map = mapRef.current; const layer = markersRef.current; if (!map || !layer) return; layer.clearLayers(); const points = []; locations.forEach((account) => { const location = account.currentLocation; if (!location) return; const isMe = accountKey(account.username) === accountKey(username); const icon = L.divIcon({ className: 'chronos-map-icon-wrap', html: `<span class="chronos-map-pin user${isMe ? ' me' : ''}"><i></i></span>`, iconSize: [32,38], iconAnchor: [16,34] }); const marker = L.marker([location.latitude, location.longitude], { icon }).addTo(layer); const popup = document.createElement('article'); popup.className = 'chronos-map-popup'; const status = document.createElement('span'); status.textContent = `${account.presence?.toUpperCase() || 'ONLINE'} · LIVE GPS`; const title = document.createElement('b'); title.textContent = isMe ? `${account.username} · You` : account.username; const accuracy = document.createElement('p'); accuracy.textContent = location.accuracy ? `Accuracy approximately ±${Math.round(location.accuracy)} metres` : 'Live browser location'; popup.append(status,title,accuracy); marker.bindPopup(popup,{closeButton:false,offset:[0,-23]}); points.push([location.latitude,location.longitude]); }); if (!centeredRef.current && points.length) { centeredRef.current = true; points.length === 1 ? map.flyTo(points[0],16,{duration:1.3}) : map.fitBounds(L.latLngBounds(points).pad(.45),{maxZoom:15}); } }, [locations, username]);
+  useEffect(() => {
+    const map = mapRef.current; const layer = markersRef.current; if (!map || !layer) return; layer.clearLayers(); const points = [];
+    locations.forEach((account) => {
+      const location = account.currentLocation; if (!location) return;
+      const isMe = accountKey(account.username) === accountKey(username); const isLive = account.locationLive;
+      const seenTime = new Date(location.updatedAt || account.lastSeen || Date.now()).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+      const statusText = isLive ? `${(account.presence || 'online').toUpperCase()} · LIVE NOW` : `LAST SEEN · ${seenTime}`;
+      const icon = L.divIcon({ className: 'chronos-gps-marker-wrap', html: `<div class="gps-marker ${isLive ? 'live' : 'last'}${isMe ? ' me' : ''}"><span class="gps-pulse"></span><span class="gps-arrow"></span><div class="gps-tag"><b>${account.username}${isMe ? ' · YOU' : ''}</b><small>${statusText}</small></div></div>`, iconSize: [190,64], iconAnchor: [16,32] });
+      const marker = L.marker([location.latitude, location.longitude], { icon, zIndexOffset: isLive ? 500 : 100 }).addTo(layer);
+      const popup = document.createElement('article'); popup.className = 'chronos-map-popup'; const status = document.createElement('span'); status.textContent = statusText; const title = document.createElement('b'); title.textContent = isMe ? `${account.username} · You` : account.username; const accuracy = document.createElement('p'); accuracy.textContent = location.accuracy ? `GPS accuracy approximately ±${Math.round(location.accuracy)} metres` : 'Last known browser location'; popup.append(status,title,accuracy); marker.bindPopup(popup,{closeButton:false,offset:[0,-20]}); points.push([location.latitude,location.longitude]);
+    });
+    if (!centeredRef.current && points.length) { centeredRef.current = true; points.length === 1 ? map.flyTo(points[0],16,{duration:1.3}) : map.fitBounds(L.latLngBounds(points).pad(.45),{maxZoom:15}); }
+  }, [locations, username]);
   const meVisible = locations.some((account) => accountKey(account.username) === accountKey(username));
-  return <section className="malaysia-map-section"><header><div><span>CHRONOS WORLD / LIVE PEOPLE</span><h2>Your presence on the globe.</h2><p>Your browser updates your GPS while Chronos is open. Approved online friends appear live too.</p></div><b>{String(locations.length).padStart(2,'0')} <small>LIVE</small></b></header><div className="malaysia-map-shell"><div className="malaysia-map" ref={elementRef}/><div className="map-live-label"><i/><span>LIVE GPS WATCH</span><b>GLOBE TO STREET LEVEL</b></div>{!meVisible && <div className="map-empty-overlay"><span>⌖</span><b>Waiting for location access</b><p>Allow browser location permission to place yourself on the globe. Tracking stops when Chronos closes or you log out.</p></div>}</div><footer><span>Visible only to you and approved friends while online.</span><b>Map data © OpenStreetMap contributors</b></footer></section>;
+  return <section className="malaysia-map-section"><header><div><span>CHRONOS WORLD / FRIEND RADAR</span><h2>Your circle on the globe.</h2><p>Live friends pulse green. Offline friends retain a muted last-seen marker with their most recent GPS time.</p></div><b>{String(locations.filter((account) => account.locationLive).length).padStart(2,'0')} <small>LIVE NOW</small></b></header><div className="malaysia-map-shell"><div className="malaysia-map" ref={elementRef}/><div className="map-live-label"><i/><span>FRIENDS ONLY</span><b>PRIVATE CIRCLE RADAR</b></div>{!meVisible && <div className="map-empty-overlay"><span>⌖</span><b>Waiting for location access</b><p>Allow browser location permission to place yourself on the globe. Only approved friends can retrieve your marker.</p></div>}</div><footer><span>Location visibility is restricted to mutual Chronos friends.</span><b>Map data © OpenStreetMap contributors</b></footer></section>;
 }
 
 function FancyCalendar({ selected, onSelect, onClose }) {
@@ -590,4 +646,4 @@ function App() {
   return <div className="app-shell">{showIntro && <IntroSequence onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout}/>} {page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => setPage('lobby')}/> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); setPage('friend'); }} onOpenPlanner={() => setPage('planner')} onOpenLobby={() => setPage('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {liveNotice && <button className="live-notification" onClick={() => { setPage('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Social Inbox →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
 }
 
-createRoot(document.getElementById('root')).render(<App/>);
+createRoot(document.getElementById('root')).render(<><App/><ChronosDialogHost/></>);

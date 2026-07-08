@@ -78,13 +78,14 @@ export async function setAccountPresence(username, status) {
   return { friends: account?.friends || [], changed: before?.presence !== status };
 }
 export async function updateAccountLocation(username, location) {
-  const usernameKey = username.toLowerCase(); const account = await db.collection('accounts').findOneAndUpdate({ usernameKey }, { $set: { currentLocation: { ...location, updatedAt: new Date() } } }, { returnDocument: 'after', projection: { username: 1, friends: 1, currentLocation: 1 } });
+  const usernameKey = username.toLowerCase(); const positioned = { ...location, updatedAt: new Date() }; const account = await db.collection('accounts').findOneAndUpdate({ usernameKey }, { $set: { currentLocation: positioned, lastKnownLocation: positioned } }, { returnDocument: 'after', projection: { username: 1, friends: 1, currentLocation: 1 } });
   return account ? { username: account.username, friends: account.friends || [], location: account.currentLocation } : null;
 }
 export async function clearAccountLocation(username) { await db.collection('accounts').updateOne({ usernameKey: username.toLowerCase() }, { $unset: { currentLocation: '' } }); }
 export async function getLiveLocations(username) {
   const account = await db.collection('accounts').findOne({ usernameKey: username.toLowerCase() }); if (!account) return [];
-  return db.collection('accounts').find({ usernameKey: { $in: [account.usernameKey, ...(account.friends || [])] }, presence: { $ne: 'offline' }, currentLocation: { $exists: true } }, { projection: { _id: 0, username: 1, usernameKey: 1, presence: 1, currentLocation: 1 } }).toArray();
+  const accounts = await db.collection('accounts').find({ usernameKey: { $in: [account.usernameKey, ...(account.friends || [])] }, $or: [{ currentLocation: { $exists: true } }, { lastKnownLocation: { $exists: true } }] }, { projection: { _id: 0, username: 1, usernameKey: 1, presence: 1, currentLocation: 1, lastKnownLocation: 1, lastSeen: 1 } }).toArray();
+  return accounts.map(({ lastKnownLocation, ...entry }) => ({ ...entry, currentLocation: entry.currentLocation || lastKnownLocation, locationLive: Boolean(entry.currentLocation) && entry.presence !== 'offline' }));
 }
 
 export async function getSocial(username) {
