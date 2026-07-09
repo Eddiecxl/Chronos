@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="42%" r="58%">
+      <stop offset="0" stop-color="#2a2419"/>
+      <stop offset=".48" stop-color="#11151b"/>
+      <stop offset="1" stop-color="#07090d"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" x2="1">
+      <stop offset="0" stop-color="#8f7345"/>
+      <stop offset=".5" stop-color="#f1d59a"/>
+      <stop offset="1" stop-color="#9c7b43"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#glow)"/>
+  <path d="M96 505C238 405 394 356 563 358c210 2 379-66 541-218" fill="none" stroke="#c9a96e" stroke-opacity=".12" stroke-width="2"/>
+  <circle cx="832" cy="300" r="164" fill="none" stroke="#c9a96e" stroke-opacity=".22" stroke-width="2"/>
+  <ellipse cx="832" cy="300" rx="212" ry="68" fill="none" stroke="#c9a96e" stroke-opacity=".22" stroke-width="2" transform="rotate(-25 832 300)"/>
+  <ellipse cx="832" cy="300" rx="212" ry="68" fill="none" stroke="#c9a96e" stroke-opacity=".18" stroke-width="2" transform="rotate(28 832 300)"/>
+  <circle cx="832" cy="300" r="78" fill="#11151b" stroke="url(#gold)" stroke-width="3"/>
+  <text x="832" y="330" text-anchor="middle" fill="#f2d18d" font-family="Georgia, serif" font-size="92">C</text>
+  <text x="92" y="160" fill="#c9a96e" font-family="Manrope, Arial, sans-serif" font-size="22" letter-spacing="8">CHRONOS</text>
+  <text x="90" y="260" fill="#f4eee2" font-family="Manrope, Arial, sans-serif" font-size="78" font-weight="600">Own your hours.</text>
+  <text x="94" y="330" fill="#aeb3bc" font-family="Manrope, Arial, sans-serif" font-size="30">Private planning, live rooms, and time that feels intentional.</text>
+  <rect x="94" y="410" width="266" height="58" rx="29" fill="url(#gold)"/>
+  <text x="227" y="448" text-anchor="middle" fill="#111318" font-family="Manrope, Arial, sans-serif" font-size="19" font-weight="700" letter-spacing="2">ENTER CHRONOS</text>
+</svg>
