@@ -95,12 +95,12 @@ function Logo({ onClick }) {
   return <div className={`logo ${onClick ? 'logo-link' : ''}`} onClick={onClick} onKeyDown={(event) => { if (onClick && (event.key === 'Enter' || event.key === ' ')) onClick(); }} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined} aria-label={onClick ? 'Go to Chronos home' : undefined}><span className="logo-mark">C</span><span>CHRONOS</span></div>;
 }
 
-function IntroSequence({ onComplete }) {
+function IntroSequence({ onComplete, onDeparting }) {
   const [departing, setDeparting] = useState(false);
   useEffect(() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     document.body.classList.add('intro-active');
-    const departureTimer = window.setTimeout(() => setDeparting(true), reduced ? 180 : 4200);
+    const departureTimer = window.setTimeout(() => { setDeparting(true); onDeparting?.(); }, reduced ? 180 : 4200);
     const completeTimer = window.setTimeout(onComplete, reduced ? 700 : 5000);
     return () => {
       window.clearTimeout(departureTimer);
@@ -113,6 +113,7 @@ function IntroSequence({ onComplete }) {
   }, [departing]);
   const skip = () => {
     setDeparting(true);
+    onDeparting?.();
     window.setTimeout(onComplete, 650);
   };
   return <div className={`intro-screen ${departing ? 'intro-departing' : ''}`} role="dialog" aria-label="Welcome to Chronos" aria-modal="true">
@@ -723,6 +724,7 @@ function Footer() { return <><BackToTop/><footer><Logo/><p>Make time feel like y
 
 function App() {
   const [showIntro, setShowIntro] = useState(true);
+  const [inviteReady, setInviteReady] = useState(false);
   const [social, setSocial] = useState(readSocial);
   const [username, setUsername] = useState(() => localStorage.getItem(SESSION_KEY) || '');
   const initialRoute = parseChronosRoute();
@@ -806,7 +808,7 @@ function App() {
   const backToMine = () => { setViewing(''); replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); };
   const logout = () => { const key = accountKey(username); updateSocial((current) => current.accounts[key] ? ({ ...current, accounts: { ...current.accounts, [key]: { ...current.accounts[key], online: false, lastSeen: Date.now() } } }) : current); localStorage.removeItem(SESSION_KEY); setUsername(''); setViewing(''); setRoom(null); replaceChronosRoute('auth'); setPage('auth'); };
   const navigate = (next) => { setViewing(''); pushChronosRoute(next); setPage(next); };
-  return <div className="app-shell">{showIntro && <IntroSequence onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} {page === 'invite' ? <InvitePage ready={!showIntro} onJoin={() => { replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); }}/> : page === 'admin' ? <AdminPage/> : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/> : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
+  return <div className="app-shell">{showIntro && <IntroSequence onDeparting={() => setInviteReady(true)} onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} {page === 'invite' ? <InvitePage ready={inviteReady || !showIntro} onJoin={() => { replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); }}/> : page === 'admin' ? <AdminPage/> : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/> : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
 }
 
 createRoot(document.getElementById('root')).render(<><App/><ChronosDialogHost/></>);
