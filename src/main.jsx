@@ -358,6 +358,11 @@ function Room({ room, username, onLeave }) {
     if (!latest) return;
     if (stickToBottom.current || latest.author === username) window.setTimeout(() => scrollToLatest(), 40);
   }, [messages.length, typing.length, username]);
+  useEffect(() => {
+    if (welcoming) return;
+    stickToBottom.current = true;
+    [0, 80, 240].forEach((delay) => window.setTimeout(() => scrollToLatest('auto'), delay));
+  }, [welcoming, room.id]);
   const changeMessage = (value) => { setMessage(value); sendTyping(Boolean(value.trim())); clearTimeout(typingTimer.current); typingTimer.current = setTimeout(() => sendTyping(false), 1300); };
   const copyInvite = async () => {
     const link = `${window.location.origin}${routeFor('room', room.id)}`;
