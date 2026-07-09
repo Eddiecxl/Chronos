@@ -574,3 +574,12 @@ html{font-size:clamp(14px,.35vw + 12.5px,18px);overflow-x:hidden}body{min-width:
 .orbit-block.is-overlap{grid-template-rows:minmax(0,1fr) auto!important;padding:12px 12px 9px!important}
 .orbit-block.is-overlap span{max-width:calc(100% - 58px)!important}
 @media(max-width:700px){.orbit-block{gap:5px!important;padding:8px 8px 7px!important}.orbit-block span{font-size:10px!important}.orbit-block.is-overlap span{max-width:calc(100% - 48px)!important}}
+
+/* Auth page ergonomics and lobby notification priority */
+.auth-page{min-height:calc(100dvh - 82px)!important;padding-top:clamp(18px,4vw,52px)!important;padding-bottom:clamp(28px,5vw,72px)!important;gap:clamp(24px,5vw,70px)!important}
+.auth-visual{min-height:clamp(360px,42vw,500px)!important}.auth-card{align-self:center}.auth-tabs{margin-bottom:26px!important}.auth-card h2{margin-bottom:20px!important}.auth-card label{margin:13px 0!important}.auth-card input{padding:13px 14px!important}
+.live-notification{z-index:1500!important}.live-room-grid article.has-unread{border-color:#ff6b64!important;box-shadow:0 0 0 1px rgba(229,87,79,.34),0 22px 70px rgba(0,0,0,.32),0 0 32px rgba(229,87,79,.12)!important}
+.live-room-grid article.has-unread:before{content:''!important;position:absolute!important;z-index:10!important;right:18px!important;top:18px!important;width:13px!important;height:13px!important;border-radius:50%!important;background:#ff4f47!important;box-shadow:0 0 0 4px rgba(255,79,71,.13),0 0 22px rgba(255,79,71,.85)!important;animation:nowSignal 1.4s infinite}
+.live-room-grid article.has-unread h3:after{content:'Unread'!important}
+@media(max-width:900px){.auth-page{display:grid!important;grid-template-columns:1fr!important;align-items:start!important;padding-top:14px!important}.auth-card{order:1}.auth-visual{order:2;min-height:220px!important;justify-content:flex-start!important}.auth-visual h1{font-size:clamp(34px,9vw,48px)!important;margin:14px 0 10px!important}.auth-visual>p,.auth-trust{display:none}.auth-orbit{opacity:.38;right:-80px;top:-40px;width:min(420px,95vw)}}
+@media(max-width:520px){.auth-page{padding-inline:12px!important;padding-bottom:34px!important}.auth-card{padding:20px 16px!important}.auth-tabs{margin-bottom:18px!important}.auth-card h2{font-size:26px!important;margin-bottom:16px!important}.auth-card label{margin:11px 0!important}.auth-submit{min-height:44px!important;margin-top:8px!important}.forgot-pin{padding-top:14px}.auth-card>small{margin-top:16px;padding-top:14px}.notification-permission{bottom:12px!important}.live-notification{bottom:82px!important}}
