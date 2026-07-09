@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { accountExists, addPlan, addRoomMessage, answerFriendRequest, clearAccountLocation, clearNotifications, createAccount, createFriendRequest, createRoom, deleteRoom, dismissNotification, getCachedGeocode, getLiveLocations, getPlans, getRoom, getRoomMessages, getSocial, initStore, kickRoomMember, loginAccount, markMessageSeen, recordUser, removeFriend, removePlan, resetAccountPin, saveCachedGeocode, setAccountPresence, updateAccountLocation, updatePlan } from './store.js';
+import { accountExists, addPlan, addRoomMessage, answerFriendRequest, clearAccountLocation, clearNotifications, clearRoomMessages, createAccount, createFriendRequest, createRoom, deleteRoom, deleteRoomAny, dismissNotification, getAdminDashboard, getCachedGeocode, getLiveLocations, getPlans, getRoom, getRoomMessages, getSocial, initStore, kickRoomMember, loginAccount, markMessageSeen, recordUser, removeFriend, removePlan, resetAccountPin, saveCachedGeocode, setAccountPresence, updateAccountLocation, updatePlan, verifyAdminPin } from './store.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -24,10 +24,18 @@ const publishRoom = (roomId, type, payload = {}, except = null) => {
   roomClients.get(roomId)?.forEach((client) => { if (client !== except) client.response.write(message); });
 };
 const publishRoomMember = (roomId, username, type, payload = {}) => { const message = `data: ${JSON.stringify({ type, payload, at: Date.now() })}\n\n`; roomClients.get(roomId)?.forEach((client) => { if (client.username.toLowerCase() === username.toLowerCase()) client.response.write(message); }); };
+const roomParticipantKeys = (room) => [...new Set([room.creatorKey, ...(room.members || []).map((member) => member.key || member.name).filter(Boolean).map((name) => String(name).toLowerCase())])];
+const roomActiveKeys = (roomId) => new Set([...(roomClients.get(roomId) || [])].map((client) => client.username.toLowerCase()));
 
 const cleanUsername = (value) => String(value || '').trim().slice(0, 40);
 const validPin = (value) => /^\d{3}$/.test(String(value || ''));
 const validUsername = (value) => /^[A-Za-z0-9_.-]{3,24}$/.test(value);
+const requireAdmin = async (req, res, next) => {
+  const username = cleanUsername(req.headers['x-admin-username'] || req.body?.username || req.query?.username);
+  const pin = String(req.headers['x-admin-pin'] || req.body?.pin || req.query?.pin || '');
+  if (!username || !validPin(pin) || !(await verifyAdminPin(username, pin))) return res.status(403).json({ error: 'Admin access required.' });
+  next();
+};
 let lastGeocodeAt = 0;
 const geocodeMalaysia = async (location) => {
   const queryKey = location.trim().toLowerCase(); if (!queryKey) return null;
@@ -58,6 +66,27 @@ app.post('/api/accounts/login', async (req, res) => {
   const account = await loginAccount(username, pin);
   if (!account) return res.status(401).json({ error: 'Username or PIN is incorrect.' });
   res.json(account);
+});
+app.post('/api/admin/login', async (req, res) => {
+  const username = cleanUsername(req.body.username); const pin = String(req.body.pin || '');
+  if (!validUsername(username) || !validPin(pin)) return res.status(400).json({ error: 'Enter the admin username and 3-number PIN.' });
+  const account = await verifyAdminPin(username, pin);
+  if (!account) return res.status(401).json({ error: 'Admin username or PIN is incorrect.' });
+  res.json({ username: account.username, role: 'admin' });
+});
+app.get('/api/admin/dashboard', requireAdmin, async (_req, res) => res.json(await getAdminDashboard()));
+app.delete('/api/admin/rooms/:id', requireAdmin, async (req, res) => {
+  const room = await deleteRoomAny(req.params.id);
+  if (!room) return res.status(404).json({ error: 'Room not found.' });
+  publishRoom(req.params.id, 'room-deleted', { roomName: room.name, by: 'Chronos Admin' });
+  room.members?.forEach((member) => publish(member.key || member.name, 'room-deleted', { roomName: room.name, by: 'Chronos Admin' }));
+  publish(room.creatorKey, 'room-deleted', { roomName: room.name, by: 'Chronos Admin' });
+  res.status(204).end();
+});
+app.delete('/api/admin/rooms/:id/messages', requireAdmin, async (req, res) => {
+  const deleted = await clearRoomMessages(req.params.id);
+  publishRoom(req.params.id, 'room-cleared', { by: 'Chronos Admin' });
+  res.json({ deleted });
 });
 app.post('/api/accounts/reset-pin', async (req, res) => {
   const username = cleanUsername(req.body.username); const password = String(req.body.password || ''); const pin = String(req.body.pin || '');
@@ -136,7 +165,12 @@ app.get('/api/rooms/:id/messages', async (req, res) => res.json(await getRoomMes
 app.post('/api/rooms/:id/messages', async (req, res) => {
   const author = cleanUsername(req.body.author); const text = String(req.body.text || '').trim().slice(0, 1000);
   if (!author || !text) return res.status(400).json({ error: 'Author and message are required.' });
-  const saved = await addRoomMessage({ id: crypto.randomUUID(), roomId: req.params.id, author, text }); publishRoom(req.params.id, 'room-message', saved); res.status(201).json(saved);
+  const room = await getRoom(req.params.id);
+  if (!room || !roomParticipantKeys(room).includes(author.toLowerCase())) return res.status(403).json({ error: 'You are not invited to this room.' });
+  const saved = await addRoomMessage({ id: crypto.randomUUID(), roomId: req.params.id, author, text }); publishRoom(req.params.id, 'room-message', saved);
+  const active = roomActiveKeys(req.params.id);
+  roomParticipantKeys(room).filter((key) => key !== author.toLowerCase() && !active.has(key)).forEach((key) => publish(key, 'room-message-notice', { roomId: room.id, roomName: room.name, from: author }));
+  res.status(201).json(saved);
 });
 app.post('/api/rooms/:id/messages/:messageId/seen', async (req, res) => { const username = cleanUsername(req.body.username); const seen = username && await markMessageSeen(req.params.id, req.params.messageId, username); if (seen) publishRoom(req.params.id, 'message-seen', { messageId: req.params.messageId, ...seen }); res.status(204).end(); });
 app.get('/api/plans', async (req, res) => {

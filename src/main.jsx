@@ -13,6 +13,19 @@ const currentMalaysiaTime = () => new Intl.DateTimeFormat('en-GB', {
   minute: '2-digit',
   hourCycle: 'h23'
 }).format(new Date());
+const CHRONOS_ROOT = '/chronos';
+const routeFor = (page = 'home', value = '') => page === 'auth' ? CHRONOS_ROOT : page === 'room' && value ? `${CHRONOS_ROOT}/lobby/${encodeURIComponent(value)}` : page === 'friend' && value ? `${CHRONOS_ROOT}/friend/${encodeURIComponent(value)}` : `${CHRONOS_ROOT}/${page}`;
+const parseChronosRoute = () => {
+  const parts = window.location.pathname.split('/').filter(Boolean);
+  const rootIndex = parts[0] === 'chronos' ? 1 : 0;
+  const area = parts[rootIndex] || '';
+  if (area === 'lobby' && parts[rootIndex + 1]) return { page: 'room', roomId: decodeURIComponent(parts[rootIndex + 1]) };
+  if (['home', 'planner', 'lobby', 'admin'].includes(area)) return { page: area };
+  if (area === 'friend' && parts[rootIndex + 1]) return { page: 'friend', viewing: decodeURIComponent(parts[rootIndex + 1]) };
+  return { page: '' };
+};
+const pushChronosRoute = (page, roomId = '') => window.history.pushState({}, '', routeFor(page, roomId));
+const replaceChronosRoute = (page, roomId = '') => window.history.replaceState({}, '', routeFor(page, roomId));
 
 const Icons = {
   arrow: '↗', check: '✓', clock: '◷', plus: '+', trash: '×', spark: '✦', calendar: '□'
@@ -125,11 +138,12 @@ function BackToTop() {
   return <button className={`back-to-top ${visible ? 'visible' : ''}`} style={{ '--scroll-progress': `${progress * 3.6}deg` }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="Back to top"><span>↑</span><small>TOP</small></button>;
 }
 
-function Header({ page, setPage, username, logout }) {
+function Header({ page, setPage, username, logout, isAdmin = false }) {
   return <header className="header"><Logo onClick={() => setPage('home')}/><nav>
     <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>Overview</button>
     {username && <button className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}>Planner</button>}
     {username && <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}>Lobby</button>}
+    {isAdmin && <button className={page === 'admin' ? 'active' : ''} onClick={() => setPage('admin')}>Admin</button>}
   </nav><div className="header-user">{username ? <><span className="online-dot"/>{username}<button className="text-button" onClick={logout}>Exit</button></> : <span>24 hours. Intentionally.</span>}</div></header>;
 }
 
@@ -191,6 +205,8 @@ function SocialLobby({ username, social, updateSocial, onEnterRoom }) {
   useEffect(() => { document.querySelectorAll('.friends-grid article').forEach((card) => { const friend = friends.find((item) => item.name === card.querySelector('h3')?.textContent); if (friend) card.dataset.presence = friend.status; }); }, [social]);
   const requests = social.requests.filter((item) => item.to === myKey && item.status === 'pending');
   const notifications = social.notifications.filter((item) => item.to === myKey).sort((a, b) => b.createdAt - a.createdAt);
+  const visibleRooms = social.rooms.filter((item) => item.creatorKey === myKey || item.members?.some((member) => member.key === myKey));
+  const unreadRoomIds = new Set(notifications.filter((item) => item.type === 'room-message' && !item.read).map((item) => item.roomId));
   const addFriend = async (event) => {
     event.preventDefault();
     const target = accountKey(friendName);
@@ -231,8 +247,12 @@ function SocialLobby({ username, social, updateSocial, onEnterRoom }) {
   };
   const openInvite = (notification) => {
     const room = social.rooms.find((item) => item.id === notification.roomId);
-    updateSocial((current) => ({ ...current, notifications: current.notifications.map((item) => item.id === notification.id ? { ...item, read: true } : item) }));
+    updateSocial((current) => ({ ...current, notifications: current.notifications.map((item) => item.id === notification.id || item.roomId === notification.roomId ? { ...item, read: true } : item) }));
     room ? onEnterRoom(room) : setNotice('That room is no longer live.');
+  };
+  const openRoom = (room) => {
+    updateSocial((current) => ({ ...current, notifications: current.notifications.map((item) => item.roomId === room.id ? { ...item, read: true } : item) }));
+    onEnterRoom(room);
   };
   const dismissNotification = async (id) => { updateSocial((current) => ({ ...current, notifications: current.notifications.filter((item) => item.id !== id) })); await fetch(api(`/api/notifications/${encodeURIComponent(id)}?username=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => {}); };
   const clearAllNotifications = async () => { updateSocial((current) => ({ ...current, notifications: [] })); await fetch(api(`/api/notifications?username=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => {}); };
@@ -240,8 +260,8 @@ function SocialLobby({ username, social, updateSocial, onEnterRoom }) {
     <section className="lobby-hero"><div><div className="eyebrow"><span>✦</span> Chronos social lobby</div><h1>Your people.<br/><em>Perfectly in orbit.</em></h1><p>Approve your circle, see who is live, and gather everyone inside a room that waits for you.</p></div><div className="lobby-live-card"><i/><span>LOBBY LIVE</span><b>{friends.filter((friend) => friend.online).length + 1}</b><small>people online now</small></div></section>
     <section className="lobby-layout"><div className="friends-panel"><header><div><span>YOUR CIRCLE</span><h2>Friends</h2></div><b>{String(friends.length).padStart(2, '0')}</b></header><form className="add-friend-form" onSubmit={addFriend}><label>Find an account by username</label><div><input value={friendName} onChange={(event) => { setFriendName(event.target.value); setNotice(''); }} placeholder="Exact Chronos username"/><button className="gold-button">Send request <span>+</span></button></div>{notice && <small>{notice}</small>}</form><div className="friends-grid">{friends.map((friend) => <article className={friend.online ? 'is-online' : ''} key={friend.id}><button className={`friend-select ${selected.includes(friend.id) ? 'selected' : ''}`} onClick={() => setSelected((current) => current.includes(friend.id) ? current.filter((id) => id !== friend.id) : [...current, friend.id])}><span>{selected.includes(friend.id) ? '✓' : '+'}</span></button><button className="friend-remove" onClick={() => removeFriend(friend)} aria-label={`Remove ${friend.name}`}>×</button><div className="friend-avatar">{friend.name[0].toUpperCase()}<i/></div><div><h3>{friend.name}</h3><p><i/>{friend.online ? 'Online' : 'Offline'}</p></div><small>{friend.online ? 'AVAILABLE NOW' : 'AWAY'}</small></article>)}{!friends.length && <p className="circle-empty">Your circle is waiting for its first connection.</p>}</div></div>
       <aside className="room-builder"><span>PRIVATE ROOM / 01</span><h2>Create a room</h2><p>Select friends, open a room, and Chronos will deliver every invitation.</p><form onSubmit={createRoom}><label>Room name<input value={roomName} onChange={(event) => setRoomName(event.target.value)} placeholder={`${username}'s Room`}/></label><div className="invite-summary"><span>INVITED</span><b>{selected.length}</b><p>{selected.length ? friends.filter((friend) => selected.includes(friend.id)).map((friend) => friend.name).join(' · ') : 'Select friends from your circle'}</p></div><button className="gold-button room-create">Open room <span>↗</span></button></form><div className="room-sigil"><i/><b>C</b><i/></div></aside></section>
-    <section className="social-inbox"><header><div><span>SOCIAL INBOX</span><h2>Requests & invitations</h2><p>Every connection stays in your hands.</p></div><b>{String(requests.length + notifications.filter((item) => !item.read).length).padStart(2, '0')}</b></header><div className="inbox-grid"><div className="request-stack"><h3>FRIEND REQUESTS</h3>{requests.map((request) => <article key={request.id}><div className="inbox-avatar">{social.accounts[request.from]?.username[0]}</div><div><b>{social.accounts[request.from]?.username}</b><span>wants to join your circle</span></div><footer><button onClick={() => answerRequest(request, false)}>Reject</button><button className="approve" onClick={() => answerRequest(request, true)}>Approve</button></footer></article>)}{!requests.length && <p className="inbox-empty">No friend requests waiting.</p>}</div><div className="request-stack notification-stack"><div className="notification-stack-head"><h3>NOTIFICATIONS</h3>{notifications.length > 0 && <button onClick={clearAllNotifications}>Clear all</button>}</div>{notifications.slice(0, 8).map((item) => <article className={item.read ? 'is-read' : ''} key={item.id}><button className="notification-dismiss" onClick={() => dismissNotification(item.id)} aria-label="Dismiss notification">×</button><div className="inbox-avatar">{social.accounts[item.from]?.username?.[0]}</div><div><b>{item.type === 'room-invite' ? `${social.accounts[item.from]?.username || item.from} invited you` : `${social.accounts[item.from]?.username || item.from} ${item.accepted ? 'accepted' : 'declined'}`}</b><span>{item.type === 'room-invite' ? social.rooms.find((room) => room.id === item.roomId)?.name || 'Room closed' : 'your friend request'}</span></div>{item.type === 'room-invite' && <footer><button className="approve" onClick={() => openInvite(item)}>View room</button></footer>}</article>)}{!notifications.length && <p className="inbox-empty">Your social signal is quiet.</p>}</div></div></section>
-    <section className="live-rooms"><header><div><span>LIVE ROOMS</span><h2>Spaces that stay open.</h2><p>Rooms remain until their creator closes them manually.</p></div><b>{String(social.rooms.length).padStart(2, '0')}</b></header><div className="live-room-grid">{social.rooms.map((item, index) => <article key={item.id}><div className="live-room-orbit"><i/><i/><b>{String(index + 1).padStart(2, '0')}</b></div><span><i/> LIVE ROOM</span><h3>{item.name}</h3><p>Created by <b>{item.creator}</b></p><div className="live-room-members"><span>{item.members.slice(0, 4).map((member) => <i key={member.id}>{member.name[0]}</i>)}</span><small>{item.members.length + 1} members</small></div><footer><button className="secondary-button" onClick={() => onEnterRoom(item)}>Enter room <span>→</span></button>{item.creatorKey === myKey && <button className="delete-room" onClick={() => deleteRoom(item.id)}>Delete</button>}</footer></article>)}{!social.rooms.length && <div className="rooms-empty"><span>NO LIVE SIGNALS</span><h3>Your first room can stay open as long as you need it.</h3></div>}</div></section>
+    <section className="social-inbox"><header><div><span>SOCIAL INBOX</span><h2>Requests & invitations</h2><p>Every connection stays in your hands.</p></div><b>{String(requests.length + notifications.filter((item) => !item.read).length).padStart(2, '0')}</b></header><div className="inbox-grid"><div className="request-stack"><h3>FRIEND REQUESTS</h3>{requests.map((request) => <article key={request.id}><div className="inbox-avatar">{social.accounts[request.from]?.username[0]}</div><div><b>{social.accounts[request.from]?.username}</b><span>wants to join your circle</span></div><footer><button onClick={() => answerRequest(request, false)}>Reject</button><button className="approve" onClick={() => answerRequest(request, true)}>Approve</button></footer></article>)}{!requests.length && <p className="inbox-empty">No friend requests waiting.</p>}</div><div className="request-stack notification-stack"><div className="notification-stack-head"><h3>NOTIFICATIONS</h3>{notifications.length > 0 && <button onClick={clearAllNotifications}>Clear all</button>}</div>{notifications.slice(0, 8).map((item) => { const roomName = item.roomName || social.rooms.find((room) => room.id === item.roomId)?.name || 'Room closed'; return <article className={item.read ? 'is-read' : ''} key={item.id}><button className="notification-dismiss" onClick={() => dismissNotification(item.id)} aria-label="Dismiss notification">×</button><div className="inbox-avatar">{social.accounts[item.from]?.username?.[0] || item.from?.[0]}</div><div><b>{item.type === 'room-invite' ? `${social.accounts[item.from]?.username || item.from} invited you` : item.type === 'room-message' ? `${social.accounts[item.from]?.username || item.from} sent a message` : `${social.accounts[item.from]?.username || item.from} ${item.accepted ? 'accepted' : 'declined'}`}</b><span>{item.type === 'room-invite' || item.type === 'room-message' ? roomName : 'your friend request'}</span></div>{(item.type === 'room-invite' || item.type === 'room-message') && <footer><button className="approve" onClick={() => openInvite(item)}>View room</button></footer>}</article>; })}{!notifications.length && <p className="inbox-empty">Your social signal is quiet.</p>}</div></div></section>
+    <section className="live-rooms"><header><div><span>LIVE ROOMS</span><h2>Private spaces.</h2><p>Only rooms you host or were invited to appear here.</p></div><b>{String(visibleRooms.length).padStart(2, '0')}</b></header><div className="live-room-grid">{visibleRooms.map((item, index) => <article className={unreadRoomIds.has(item.id) ? 'has-unread' : ''} key={item.id}><div className="live-room-orbit"><i/><i/><b>{String(index + 1).padStart(2, '0')}</b></div><span><i/> PRIVATE ROOM</span><h3>{item.name}</h3><p>Created by <b>{item.creator}</b></p><div className="live-room-members"><span>{item.members.slice(0, 4).map((member) => <i key={member.id}>{member.name[0]}</i>)}</span><small>{item.members.length + 1} members</small></div><footer><button className="secondary-button" onClick={() => openRoom(item)}>Enter room <span>→</span></button>{item.creatorKey === myKey && <button className="delete-room" onClick={() => deleteRoom(item.id)}>Delete</button>}</footer></article>)}{!visibleRooms.length && <div className="rooms-empty"><span>NO PRIVATE ROOMS</span><h3>Create a room or wait for an invitation.</h3></div>}</div></section>
   </main>;
 }
 
@@ -295,9 +315,26 @@ function Room({ room, username, onLeave }) {
   const [roomNotice, setRoomNotice] = useState(null);
   const [memberPresence, setMemberPresence] = useState({});
   const typingTimer = useRef(null);
+  const lastTypingState = useRef(false);
+  const streamRef = useRef(null);
+  const stickToBottom = useRef(true);
   const isOwner = accountKey(username) === room.creatorKey;
+  const scrollToLatest = (behavior = 'smooth') => {
+    const node = streamRef.current;
+    if (node) node.scrollTo({ top: node.scrollHeight, behavior });
+  };
+  const trackScroll = () => {
+    const node = streamRef.current;
+    if (!node) return;
+    stickToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
+  };
+  const sendTyping = (typing) => {
+    if (lastTypingState.current === typing) return;
+    lastTypingState.current = typing;
+    fetch(api(`/api/rooms/${room.id}/typing`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, typing }) }).catch(() => {});
+  };
   const markSeen = (item) => item.author !== username && fetch(api(`/api/rooms/${room.id}/messages/${item.id}/seen`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) }).catch(() => {});
-  useEffect(() => { fetch(api(`/api/rooms/${room.id}/messages`)).then((response) => response.ok ? response.json() : []).then((items) => { setMessages(items); items.forEach(markSeen); }).catch(() => {}); }, [room.id]);
+  useEffect(() => { fetch(api(`/api/rooms/${room.id}/messages`)).then((response) => response.ok ? response.json() : []).then((items) => { setMessages(items); items.forEach(markSeen); window.setTimeout(() => scrollToLatest('auto'), 80); }).catch(() => {}); }, [room.id]);
   useEffect(() => { const load = () => fetch(api(`/api/social/${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : null).then((data) => { if (!data) return; const entries = [data.account, ...data.friends].map((account) => [accountKey(account.username), account.presence || (account.online ? 'online' : 'offline')]); setMemberPresence(Object.fromEntries(entries)); }).catch(() => {}); load(); const stream = new EventSource(api(`/api/events/${encodeURIComponent(username)}`)); stream.onmessage = (event) => { const signal = JSON.parse(event.data); if (signal.type === 'presence') load(); }; return () => stream.close(); }, [username]);
   useEffect(() => { document.querySelectorAll('.room-members article').forEach((card) => { const name = card.querySelector('p b')?.textContent; if (!name) return; const globalStatus = memberPresence[accountKey(name)] || 'offline'; const inRoom = liveMembers.some((member) => accountKey(member) === accountKey(name)); const label = card.querySelector('p span'); if (label) { const host = accountKey(name) === room.creatorKey ? ' · Host' : ''; label.lastChild.textContent = `${globalStatus[0].toUpperCase()}${globalStatus.slice(1)} · ${inRoom ? 'In room' : 'Not in room'}${host}`; card.dataset.roomPresence = inRoom ? 'in-room' : 'not-in-room'; card.dataset.globalPresence = globalStatus; } }); }, [liveMembers, memberPresence]);
   useEffect(() => {
@@ -311,16 +348,27 @@ function Room({ room, username, onLeave }) {
       if (signal.type === 'member-joined') setRoomNotice(`${payload.username} joined ${room.name}`);
       if (signal.type === 'member-left' || signal.type === 'member-removed') setRoomNotice(`${payload.username} left ${room.name}`);
       if (signal.type === 'room-deleted') { await chronosNotice({ title: 'Room closed', message: `${payload.by} deleted ${payload.roomName}. The room is no longer available.`, confirmLabel: 'Return to lobby' }); onLeave(); }
+      if (signal.type === 'room-cleared') { setMessages([]); setRoomNotice(`${payload.by} cleared the room chat.`); }
       if (signal.type === 'member-kicked' && accountKey(payload.username) === accountKey(username)) { await chronosNotice({ title: 'You were removed', message: `${payload.by} removed you from ${room.name}.`, confirmLabel: 'Return to lobby' }); onLeave(); }
     };
-    return () => { stream.close(); clearTimeout(typingTimer.current); };
+    return () => { stream.close(); clearTimeout(typingTimer.current); sendTyping(false); };
   }, [room.id, username]);
-  const changeMessage = (value) => { setMessage(value); fetch(api(`/api/rooms/${room.id}/typing`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, typing: Boolean(value.trim()) }) }).catch(() => {}); clearTimeout(typingTimer.current); typingTimer.current = setTimeout(() => fetch(api(`/api/rooms/${room.id}/typing`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, typing: false }) }).catch(() => {}), 1300); };
-  const send = async (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; changeMessage(''); const response = await fetch(api(`/api/rooms/${room.id}/messages`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: username, text }) }).catch(() => null); if (response?.ok) { const saved = await response.json(); setMessages((current) => [...current, saved]); } };
+  useEffect(() => {
+    const latest = messages.at(-1);
+    if (!latest) return;
+    if (stickToBottom.current || latest.author === username) window.setTimeout(() => scrollToLatest(), 40);
+  }, [messages.length, typing.length, username]);
+  const changeMessage = (value) => { setMessage(value); sendTyping(Boolean(value.trim())); clearTimeout(typingTimer.current); typingTimer.current = setTimeout(() => sendTyping(false), 1300); };
+  const copyInvite = async () => {
+    const link = `${window.location.origin}${routeFor('room', room.id)}`;
+    try { await navigator.clipboard.writeText(link); setRoomNotice('Invite link copied. Only the host and invited members can open it.'); }
+    catch { setRoomNotice(link); }
+  };
+  const send = async (event) => { event.preventDefault(); const text = message.trim(); if (!text) return; changeMessage(''); stickToBottom.current = true; const response = await fetch(api(`/api/rooms/${room.id}/messages`), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ author: username, text }) }).catch(() => null); if (response?.ok) { const saved = await response.json(); setMessages((current) => [...current, saved]); } };
   const kick = async (name) => { if (!(await chronosConfirm({ title: `Remove ${name}?`, message: `${name} will be removed from ${room.name} immediately.`, confirmLabel: 'Remove member' }))) return; const response = await fetch(api(`/api/rooms/${room.id}/members/${encodeURIComponent(name)}?creator=${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => null); if (!response?.ok) return setRoomNotice('Only the room owner can remove members.'); setLiveMembers((current) => current.filter((member) => member !== name)); };
   if (welcoming) return <RoomWelcome room={room} onComplete={() => setWelcoming(false)}/>;
   const invited = room.members || [];
-  return <main className="room-page"><section className="room-head"><button className="secondary-button" onClick={onLeave}>← Lobby</button><div><span>CHRONOS PRIVATE ROOM</span><h1>{room.name}</h1><p><i/> Room active · {liveMembers.length} live now</p></div><button className="gold-button" onClick={() => navigator.clipboard?.writeText(window.location.href)}>Copy invite <span>↗</span></button></section><section className="room-layout"><div className="room-conversation"><header><span>ROOM SIGNAL</span><b>LIVE</b></header><div className="message-stream">{messages.map((item) => { const receipts = (item.seenBy || []).filter((seen) => seen.username !== username); return <article key={item.id} className={item.author === username ? 'my-message' : 'their-message'}><div>{item.author[0].toUpperCase()}</div><p><b>{item.author === username ? 'You' : item.author}</b><span>{item.text}</span>{item.author === username && <small className="read-receipt">{receipts.length ? `Seen by ${receipts.map((seen) => seen.username).join(', ')} · ${new Date(receipts.at(-1).seenAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Sent · not seen yet'}</small>}</p><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></article>})}{!messages.length && <div className="room-chat-empty"><span>✦</span><b>No messages yet</b><p>Start the room conversation.</p></div>}</div><div className={`typing-signal ${typing.length ? 'visible' : ''}`}><i/><span>{typing.length === 1 ? `${typing[0]} is typing` : typing.length ? `${typing.join(', ')} are typing` : 'No one is typing'}</span><b/><b/><b/></div><form onSubmit={send}><input value={message} onChange={(event) => changeMessage(event.target.value)} placeholder="Write to the room…"/><button className="gold-button">Send <span>↗</span></button></form></div><aside className="room-members"><header><span>LIVE MEMBERS</span><b>{String(liveMembers.length).padStart(2, '0')}</b></header>{liveMembers.map((name) => <article className="is-online" key={name}><div>{name[0].toUpperCase()}</div><p><b>{name}</b><span><i/>Online {accountKey(name) === room.creatorKey ? '· Host' : ''}</span></p>{isOwner && accountKey(name) !== room.creatorKey && <button onClick={() => kick(name)} title={`Remove ${name}`}>×</button>}</article>)}{invited.filter((friend) => !liveMembers.includes(friend.name)).map((friend) => <article key={friend.id}><div>{friend.name[0].toUpperCase()}</div><p><b>{friend.name}</b><span><i/>Invited · Offline</span></p>{isOwner && <button onClick={() => kick(friend.name)} title={`Remove ${friend.name}`}>×</button>}</article>)}</aside></section>{roomNotice && <button className="room-live-notice" onClick={() => setRoomNotice(null)}><i/><span><small>ROOM UPDATE</small><b>{roomNotice}</b></span><strong>×</strong></button>}</main>;
+  return <main className="room-page"><section className="room-head"><button className="secondary-button" onClick={onLeave}>← Lobby</button><div><span>CHRONOS PRIVATE ROOM</span><h1>{room.name}</h1><p><i/> Room active · {liveMembers.length} live now</p></div><button className="gold-button copy-invite" onClick={copyInvite}>Copy invite <span>↗</span></button></section><section className="room-layout"><div className="room-conversation"><header><span>ROOM SIGNAL</span><b>LIVE</b></header><div className="message-stream" ref={streamRef} onScroll={trackScroll}>{messages.map((item) => { const receipts = (item.seenBy || []).filter((seen) => seen.username !== username); return <article key={item.id} className={item.author === username ? 'my-message' : 'their-message'}><div>{item.author[0].toUpperCase()}</div><p><b>{item.author === username ? 'You' : item.author}</b><span>{item.text}</span>{item.author === username && <small className="read-receipt">{receipts.length ? `Seen by ${receipts.map((seen) => seen.username).join(', ')} · ${new Date(receipts.at(-1).seenAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Sent · not seen yet'}</small>}</p><time>{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time></article>})}{!messages.length && <div className="room-chat-empty"><span>✦</span><b>No messages yet</b><p>Start the room conversation.</p></div>}</div><div className={`typing-signal ${typing.length ? 'visible' : ''}`}><i/><span>{typing.length === 1 ? `${typing[0]} is typing` : typing.length ? `${typing.join(', ')} are typing` : 'No one is typing'}</span><b/><b/><b/></div><form onSubmit={send}><input value={message} onChange={(event) => changeMessage(event.target.value)} placeholder="Write to the room…" autoComplete="off"/><button className="gold-button">Send <span>↗</span></button></form></div><aside className="room-members"><header><span>LIVE MEMBERS</span><b>{String(liveMembers.length).padStart(2, '0')}</b></header>{liveMembers.map((name) => <article className="is-online" key={name}><div>{name[0].toUpperCase()}</div><p><b>{name}</b><span><i/>Online {accountKey(name) === room.creatorKey ? '· Host' : ''}</span></p>{isOwner && accountKey(name) !== room.creatorKey && <button onClick={() => kick(name)} title={`Remove ${name}`}>×</button>}</article>)}{invited.filter((friend) => !liveMembers.includes(friend.name)).map((friend) => <article key={friend.id}><div>{friend.name[0].toUpperCase()}</div><p><b>{friend.name}</b><span><i/>Invited · Offline</span></p>{isOwner && <button onClick={() => kick(friend.name)} title={`Remove ${friend.name}`}>×</button>}</article>)}</aside></section>{roomNotice && <button className="room-live-notice" onClick={() => setRoomNotice(null)}><i/><span><small>ROOM UPDATE</small><b>{roomNotice}</b></span><strong>×</strong></button>}</main>;
 }
 
 function AuthScreen({ social, updateSocial, onLogin }) {
@@ -364,11 +412,24 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
   const [error, setError] = useState('');
   const [liveTime, setLiveTime] = useState(currentMalaysiaTime);
   const [homePlans, setHomePlans] = useState([]);
+  const [truthMinimized, setTruthMinimized] = useState(() => window.matchMedia?.('(max-width: 680px)').matches || false);
+  const [truthPos, setTruthPos] = useState({ x: 0, y: 0 });
+  const truthDrag = useRef(null);
   useEffect(() => {
     const timer = window.setInterval(() => setLiveTime(currentMalaysiaTime()), 1000);
     return () => window.clearInterval(timer);
   }, []);
   useEffect(() => { if (username) fetch(api(`/api/plans?username=${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : []).then(setHomePlans).catch(() => setHomePlans([])); }, [username]);
+  useEffect(() => {
+    const move = (event) => {
+      if (!truthDrag.current) return;
+      setTruthPos({ x: event.clientX - truthDrag.current.x, y: event.clientY - truthDrag.current.y });
+    };
+    const up = () => { truthDrag.current = null; };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+  }, []);
   const upcomingPlans = useMemo(() => homePlans.filter((plan) => plan.date >= today()).sort((a, b) => a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime)).slice(0, 8), [homePlans]);
   const submit = async (e) => {
     e.preventDefault();
@@ -395,7 +456,7 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
       </div>
       <div className="hero-visual" aria-label="Planner preview">
         <div className="chrono-halo"/><div className="clock-ticks"/><div className="orbit orbit-one"/><div className="orbit orbit-two"/><div className="time-core"><i className="live-pulse"/><span>{liveTime}</span><small>MALAYSIA TIME</small></div>
-        <div className="hero-truth-card"><span>LIVE DATA</span><b>{username ? `${upcomingPlans.length} upcoming ${upcomingPlans.length === 1 ? 'plan' : 'plans'}` : 'Your time begins here'}</b><p>{username ? 'Your real schedule appears directly below.' : 'Sign in to synchronize your own plans.'}</p><i/></div>
+        <div className={`hero-truth-card ${truthMinimized ? 'is-minimized' : ''}`} style={{ transform: `translate(${truthPos.x}px, ${truthPos.y}px)` }} onPointerDown={(event) => { if (event.target.closest('button')) return; truthDrag.current = { x: event.clientX - truthPos.x, y: event.clientY - truthPos.y }; }}><button type="button" className="truth-toggle" onClick={() => setTruthMinimized((current) => !current)}>{truthMinimized ? '+' : '−'}</button><span>LIVE DATA</span><b>{username ? `${upcomingPlans.length} upcoming ${upcomingPlans.length === 1 ? 'plan' : 'plans'}` : 'Your time begins here'}</b>{!truthMinimized && <p>{username ? 'Your real schedule appears directly below.' : 'Sign in to synchronize your own plans.'}</p>}<i/></div>
         <div className="hero-coordinate"><span>NO SAMPLE EVENTS</span><b>ONLY YOUR CHRONOS DATA</b></div>
         <div className="chrono-signature"><span>CHRONOS / 01</span><i/></div>
       </div>
@@ -573,22 +634,70 @@ function Planner({ username, viewOnly = false, onBack, compareUser = '' }) {
   </main>;
 }
 
+const ADMIN_SESSION_KEY = 'chronos-admin-session-v1';
+
+function AdminPage() {
+  const [credentials, setCredentials] = useState(() => {
+    try { return JSON.parse(sessionStorage.getItem(ADMIN_SESSION_KEY) || '{}'); }
+    catch { return {}; }
+  });
+  const [form, setForm] = useState({ username: credentials.username || 'chronosadmin', pin: credentials.pin || '' });
+  const [dashboard, setDashboard] = useState(null);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+  const adminHeaders = credentials.username && credentials.pin ? { 'x-admin-username': credentials.username, 'x-admin-pin': credentials.pin } : {};
+  const load = () => {
+    if (!credentials.username || !credentials.pin) return;
+    fetch(api('/api/admin/dashboard'), { headers: adminHeaders }).then((response) => response.ok ? response.json() : Promise.reject(response)).then(setDashboard).catch(() => { setDashboard(null); setError('Admin session expired. Sign in again.'); });
+  };
+  useEffect(load, [credentials.username, credentials.pin]);
+  const login = async (event) => {
+    event.preventDefault(); setError(''); setNotice('');
+    const response = await fetch(api('/api/admin/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) }).catch(() => null);
+    const result = response && await response.json().catch(() => ({}));
+    if (!response?.ok) return setError(result?.error || 'Could not sign in as admin.');
+    const next = { username: result.username, pin: form.pin };
+    sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(next)); setCredentials(next);
+  };
+  const clearMessages = async (room) => {
+    if (!(await chronosConfirm({ tone: 'warning', title: `Clear ${room.name}?`, message: 'This deletes every chat message in the room, but keeps the room open.', confirmLabel: 'Clear chat' }))) return;
+    const response = await fetch(api(`/api/admin/rooms/${room.id}/messages`), { method: 'DELETE', headers: adminHeaders }).catch(() => null);
+    if (!response?.ok) return setNotice('Could not clear that chat.');
+    setNotice(`${room.name} chat cleared.`); load();
+  };
+  const deleteRoomAsAdmin = async (room) => {
+    if (!(await chronosConfirm({ title: `Delete ${room.name}?`, message: 'This closes the room for everyone and deletes its chat history.', confirmLabel: 'Delete room' }))) return;
+    const response = await fetch(api(`/api/admin/rooms/${room.id}`), { method: 'DELETE', headers: adminHeaders }).catch(() => null);
+    if (!response?.ok) return setNotice('Could not delete that room.');
+    setNotice(`${room.name} deleted.`); load();
+  };
+  const lastSeen = (value) => value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Never';
+  if (!credentials.username || !credentials.pin) return <main className="admin-page"><section className="admin-login"><span>CHRONOS ADMIN</span><h1>Control room.</h1><p>Default admin: <b>chronosadmin</b> with PIN <b>102</b>. Override it on Render with ADMIN_USERNAME and ADMIN_PIN.</p><form onSubmit={login}><label>Admin username<input value={form.username} onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))}/></label><label>3-number PIN<input inputMode="numeric" type="password" maxLength="3" value={form.pin} onChange={(event) => setForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 3) }))}/></label>{error && <div className="form-error">{error}</div>}<button className="gold-button">Enter admin</button></form></section></main>;
+  return <main className="admin-page"><section className="admin-head"><div><span>CHRONOS ADMIN</span><h1>Rooms, users, and chat control.</h1><p>Delete rooms, clear conversations, and audit live account status.</p></div><button className="secondary-button" onClick={() => { sessionStorage.removeItem(ADMIN_SESSION_KEY); setCredentials({}); setDashboard(null); }}>Lock admin</button></section>{notice && <div className="admin-notice">{notice}</div>}{error && <div className="form-error">{error}</div>}<section className="admin-metrics"><article><span>REGISTERED USERS</span><b>{dashboard?.users?.length || 0}</b></article><article><span>PRIVATE ROOMS</span><b>{dashboard?.rooms?.length || 0}</b></article><article><span>RECENT CHATS</span><b>{dashboard?.recentMessages?.length || 0}</b></article></section><section className="admin-grid"><div className="admin-panel"><header><span>USERS</span><b>{dashboard?.users?.filter((user) => user.presence === 'online').length || 0} online</b></header><div className="admin-table">{(dashboard?.users || []).map((user) => <article key={user.id}><div><b>{user.username}</b><span>{user.role === 'admin' ? 'Admin' : 'User'}</span></div><p data-presence={user.presence || 'offline'}>{user.presence || 'offline'}</p><time>{lastSeen(user.lastSeen)}</time></article>)}</div></div><div className="admin-panel"><header><span>ROOMS</span><b>{dashboard?.rooms?.length || 0}</b></header><div className="admin-room-list">{(dashboard?.rooms || []).map((room) => <article key={room.id}><div><h3>{room.name}</h3><p>Host: {room.creator} · {(room.members?.length || 0) + 1} members · {room.messageCount || 0} messages</p></div><footer><button onClick={() => clearMessages(room)}>Clear chat</button><button className="danger" onClick={() => deleteRoomAsAdmin(room)}>Delete</button></footer></article>)}</div></div></section><section className="admin-panel recent-chat"><header><span>RECENT MESSAGES</span><b>{dashboard?.recentMessages?.length || 0}</b></header>{(dashboard?.recentMessages || []).map((message) => <article key={message.id}><b>{message.author}</b><p>{message.text}</p><time>{lastSeen(message.createdAt)}</time></article>)}</section></main>;
+}
+
 function Footer() { return <><BackToTop/><footer><Logo/><p>Make time feel like yours again.</p><span>© 2026 Chronos</span></footer></>; }
 
 function App() {
   const [showIntro, setShowIntro] = useState(true);
   const [social, setSocial] = useState(readSocial);
   const [username, setUsername] = useState(() => localStorage.getItem(SESSION_KEY) || '');
-  const sharedName = new URLSearchParams(window.location.search).get('view');
+  const initialRoute = parseChronosRoute();
+  const params = new URLSearchParams(window.location.search);
+  const sharedName = params.get('view') || initialRoute.viewing || '';
+  const requestedRoomId = params.get('room') || initialRoute.roomId || '';
   const [viewing, setViewing] = useState(sharedName || '');
-  const [page, setPageState] = useState(() => sharedName ? 'friend' : (localStorage.getItem(SESSION_KEY) ? 'home' : 'auth'));
+  const [page, setPageState] = useState(() => sharedName ? 'friend' : initialRoute.page || (localStorage.getItem(SESSION_KEY) ? 'home' : 'auth'));
   const [room, setRoom] = useState(null);
+  const currentRoomId = useRef(null);
   const [liveNotice, setLiveNotice] = useState(null);
   const idleTimer = useRef(null);
   const lastPresencePing = useRef(0);
   const lastLocationPing = useRef(0);
   const setPage = (next) => { setPageState(next); if (next === 'lobby' && liveNotice) window.setTimeout(() => document.querySelector(liveNotice.type === 'room-invite' ? '.live-rooms' : '.social-inbox')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 180); };
   const updateSocial = (update) => setSocial((current) => { const next = typeof update === 'function' ? update(current) : update; localStorage.setItem(SOCIAL_KEY, JSON.stringify(next)); return next; });
+  const isAdmin = username && social.accounts[accountKey(username)]?.role === 'admin';
+  useEffect(() => { currentRoomId.current = page === 'room' ? room?.id || null : null; }, [page, room?.id]);
   const syncSocial = () => {
     if (!username) return Promise.resolve();
     return fetch(api(`/api/social/${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : null).then((remote) => {
@@ -629,21 +738,32 @@ function App() {
       const payload = signal.payload || {};
       const copy = signal.type === 'friend-request' ? `${payload.from} sent you a friend request.`
         : signal.type === 'room-invite' ? `${payload.from} invited you to ${payload.roomName}.`
+        : signal.type === 'room-message-notice' ? `${payload.from} sent a message in ${payload.roomName}.`
         : signal.type === 'friend-response' ? `${payload.from} ${payload.accepted ? 'accepted' : 'declined'} your request.`
         : signal.type === 'friend-removed' ? `${payload.by} removed you from their circle.`
         : signal.type === 'room-deleted' ? `${payload.by} deleted ${payload.roomName}.`
         : signal.type === 'member-kicked' ? `${payload.by} removed you from a room.`
         : null;
-      if (copy) setLiveNotice({ ...signal, copy });
+      if (signal.type === 'room-message-notice' && payload.roomId && currentRoomId.current !== payload.roomId) {
+        updateSocial((current) => current.notifications.some((item) => item.type === 'room-message' && item.roomId === payload.roomId && !item.read)
+          ? current
+          : { ...current, notifications: [{ id: `message-${payload.roomId}-${Date.now()}`, type: 'room-message', to: accountKey(username), from: accountKey(payload.from), roomId: payload.roomId, roomName: payload.roomName, read: false, createdAt: Date.now() }, ...current.notifications] });
+      }
+      if (copy && !(signal.type === 'room-message-notice' && currentRoomId.current === payload.roomId)) setLiveNotice({ ...signal, copy });
     };
     return () => stream.close();
   }, [username]);
   useEffect(() => { const sync = (event) => { if (event.key === SOCIAL_KEY) setSocial(readSocial()); }; window.addEventListener('storage', sync); return () => window.removeEventListener('storage', sync); }, []);
-  const enter = (name) => { localStorage.setItem(SESSION_KEY, name); setUsername(name); setViewing(''); window.history.replaceState({}, '', window.location.pathname); setPage('home'); };
-  const backToMine = () => { setViewing(''); window.history.replaceState({}, '', window.location.pathname); setPage(username ? 'home' : 'auth'); };
-  const logout = () => { const key = accountKey(username); updateSocial((current) => current.accounts[key] ? ({ ...current, accounts: { ...current.accounts, [key]: { ...current.accounts[key], online: false, lastSeen: Date.now() } } }) : current); localStorage.removeItem(SESSION_KEY); setUsername(''); setViewing(''); setRoom(null); window.history.replaceState({}, '', window.location.pathname); setPage('auth'); };
-  const navigate = (next) => { setViewing(''); window.history.replaceState({}, '', window.location.pathname); setPage(next); };
-  return <div className="app-shell">{showIntro && <IntroSequence onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout}/>} {page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => setPage('lobby')}/> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); setPage('friend'); }} onOpenPlanner={() => setPage('planner')} onOpenLobby={() => setPage('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {liveNotice && <button className="live-notification" onClick={() => { setPage('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Social Inbox →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
+  useEffect(() => {
+    if (!username || !requestedRoomId || (page === 'room' && room?.id === requestedRoomId)) return;
+    const target = social.rooms.find((item) => item.id === requestedRoomId);
+    if (target) { setRoom(target); replaceChronosRoute('room', target.id); setPage('room'); }
+  }, [username, requestedRoomId, social.rooms, page, room?.id]);
+  const enter = (name) => { localStorage.setItem(SESSION_KEY, name); setUsername(name); setViewing(''); replaceChronosRoute('home'); setPage('home'); };
+  const backToMine = () => { setViewing(''); replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); };
+  const logout = () => { const key = accountKey(username); updateSocial((current) => current.accounts[key] ? ({ ...current, accounts: { ...current.accounts, [key]: { ...current.accounts[key], online: false, lastSeen: Date.now() } } }) : current); localStorage.removeItem(SESSION_KEY); setUsername(''); setViewing(''); setRoom(null); replaceChronosRoute('auth'); setPage('auth'); };
+  const navigate = (next) => { setViewing(''); pushChronosRoute(next); setPage(next); };
+  return <div className="app-shell">{showIntro && <IntroSequence onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} {page === 'admin' ? <AdminPage/> : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/> : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
 }
 
 createRoot(document.getElementById('root')).render(<><App/><ChronosDialogHost/></>);

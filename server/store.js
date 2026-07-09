@@ -35,6 +35,7 @@ export async function initStore() {
   await db.collection('messages').createIndex({ roomId: 1, createdAt: 1 }, { name: 'room_history' });
   await db.collection('messages').createIndex({ createdAt: 1 }, { expireAfterSeconds: 2592000, name: 'delete_messages_after_30_days' });
   await db.collection('geocodes').createIndex({ queryKey: 1 }, { unique: true, name: 'unique_geocode_query' });
+  await ensureAdminAccount();
 }
 
 const secretHash = (value, salt = randomBytes(16).toString('hex')) => `${salt}:${scryptSync(String(value), salt, 64).toString('hex')}`;
@@ -46,6 +47,23 @@ const verifySecret = (value, encoded = '') => {
   return actual.length === expected.length && timingSafeEqual(actual, expected);
 };
 const publicAccount = ({ _id, passwordHash, pinHash, ...account }) => account;
+const adminDefaults = () => ({
+  username: process.env.ADMIN_USERNAME || 'chronosadmin',
+  password: process.env.ADMIN_PASSWORD || 'ChronosAdmin2026!',
+  pin: process.env.ADMIN_PIN || '102'
+});
+
+async function ensureAdminAccount() {
+  const { username, password, pin } = adminDefaults();
+  const usernameKey = username.toLowerCase();
+  const existing = await db.collection('accounts').findOne({ usernameKey });
+  if (existing) {
+    await db.collection('accounts').updateOne({ usernameKey }, { $set: { role: 'admin', admin: true, updatedAt: new Date() } });
+    return;
+  }
+  const account = { id: crypto.randomUUID(), username, usernameKey, passwordHash: secretHash(password), pinHash: secretHash(pin), role: 'admin', admin: true, friends: [], presence: 'offline', online: false, lastSeen: new Date(), lastActive: new Date(), createdAt: new Date() };
+  await db.collection('accounts').insertOne(account);
+}
 
 export async function createAccount({ username, password, pin }) {
   if (!db) throw new Error('Accounts require MongoDB.');
@@ -53,6 +71,11 @@ export async function createAccount({ username, password, pin }) {
   const account = { id: crypto.randomUUID(), username, usernameKey, passwordHash: secretHash(password), pinHash: secretHash(pin), friends: [], presence: 'online', online: true, lastSeen: new Date(), lastActive: new Date(), createdAt: new Date() };
   await db.collection('accounts').insertOne(account);
   return publicAccount(account);
+}
+
+export async function verifyAdminPin(username, pin) {
+  const account = await db.collection('accounts').findOne({ usernameKey: username.toLowerCase(), role: 'admin' });
+  return account && verifySecret(pin, account.pinHash) ? publicAccount(account) : null;
 }
 
 export async function loginAccount(username, pin) {
@@ -95,11 +118,19 @@ export async function getSocial(username) {
   const [friends, requests, rooms] = await Promise.all([
     db.collection('accounts').find({ usernameKey: { $in: account.friends || [] } }, { projection: { _id: 0, passwordHash: 0, pinHash: 0 } }).toArray(),
     db.collection('friendRequests').find({ to: usernameKey, status: 'pending' }, { projection: { _id: 0 } }).sort({ createdAt: -1 }).toArray(),
-    db.collection('rooms').find({}, { projection: { _id: 0 } }).sort({ createdAt: -1 }).toArray()
+    db.collection('rooms').find({ $or: [{ creatorKey: usernameKey }, { 'members.key': usernameKey }] }, { projection: { _id: 0 } }).sort({ createdAt: -1 }).toArray()
   ]);
   const requesters = requests.length ? await db.collection('accounts').find({ usernameKey: { $in: requests.map((request) => request.from) } }, { projection: { _id: 0, passwordHash: 0, pinHash: 0 } }).toArray() : [];
   const dismissed = new Set(account.dismissedNotificationIds || []); const clearedAt = account.notificationsClearedAt ? new Date(account.notificationsClearedAt) : null;
-  const notifications = rooms.filter((room) => room.creatorKey !== usernameKey && room.members?.some((member) => member.key === usernameKey)).map((room) => ({ id: `invite-${room.id}-${usernameKey}`, type: 'room-invite', to: usernameKey, from: room.creatorKey, roomId: room.id, read: false, createdAt: room.createdAt })).filter((item) => !dismissed.has(item.id) && (!clearedAt || new Date(item.createdAt) > clearedAt));
+  const inviteNotifications = rooms.filter((room) => room.creatorKey !== usernameKey && room.members?.some((member) => member.key === usernameKey)).map((room) => ({ id: `invite-${room.id}-${usernameKey}`, type: 'room-invite', to: usernameKey, from: room.creatorKey, roomId: room.id, read: false, createdAt: room.createdAt }));
+  const unreadMessages = rooms.length ? await db.collection('messages').find({ roomId: { $in: rooms.map((room) => room.id) }, author: { $ne: account.username }, 'seenBy.username': { $ne: account.username } }, { projection: { _id: 0, roomId: 1, author: 1, createdAt: 1 } }).sort({ createdAt: -1 }).toArray() : [];
+  const unreadByRoom = new Map();
+  unreadMessages.forEach((message) => { if (!unreadByRoom.has(message.roomId)) unreadByRoom.set(message.roomId, message); });
+  const messageNotifications = [...unreadByRoom].map(([roomId, message]) => {
+    const room = rooms.find((item) => item.id === roomId);
+    return { id: `message-${roomId}-${usernameKey}`, type: 'room-message', to: usernameKey, from: message.author.toLowerCase(), roomId, roomName: room?.name || 'Room', read: false, createdAt: message.createdAt };
+  });
+  const notifications = [...inviteNotifications, ...messageNotifications].filter((item) => !dismissed.has(item.id) && (!clearedAt || new Date(item.createdAt) > clearedAt));
   return { account: publicAccount(account), friends, requesters, requests, rooms, notifications };
 }
 export async function dismissNotification(username, id) { return (await db.collection('accounts').updateOne({ usernameKey: username.toLowerCase() }, { $addToSet: { dismissedNotificationIds: id } })).matchedCount > 0; }
@@ -135,6 +166,13 @@ export async function removeFriend(username, friend) {
 export async function createRoom(room) { await db.collection('rooms').insertOne({ ...room, createdAt: new Date() }); return room; }
 export async function getRoom(id) { return db.collection('rooms').findOne({ id }, { projection: { _id: 0 } }); }
 export async function deleteRoom(id, creatorKey) { return (await db.collection('rooms').deleteOne({ id, creatorKey })).deletedCount > 0; }
+export async function deleteRoomAny(id) {
+  const room = await db.collection('rooms').findOne({ id }, { projection: { _id: 0 } });
+  if (!room) return null;
+  await Promise.all([db.collection('rooms').deleteOne({ id }), db.collection('messages').deleteMany({ roomId: id })]);
+  return room;
+}
+export async function clearRoomMessages(roomId) { return (await db.collection('messages').deleteMany({ roomId })).deletedCount; }
 export async function kickRoomMember(id, creatorKey, memberKey) {
   const result = await db.collection('rooms').updateOne({ id, creatorKey }, { $pull: { members: { key: memberKey } } });
   return result.matchedCount > 0;
@@ -145,6 +183,17 @@ export async function markMessageSeen(roomId, messageId, username) {
   const seen = { username, seenAt: new Date() };
   const result = await db.collection('messages').updateOne({ roomId, id: messageId, 'seenBy.username': { $ne: username } }, { $push: { seenBy: seen } });
   return result.modifiedCount ? seen : null;
+}
+
+export async function getAdminDashboard() {
+  const [users, rooms, recentMessages] = await Promise.all([
+    db.collection('accounts').find({}, { projection: { _id: 0, passwordHash: 0, pinHash: 0, dismissedNotificationIds: 0 } }).sort({ createdAt: -1 }).toArray(),
+    db.collection('rooms').find({}, { projection: { _id: 0 } }).sort({ createdAt: -1 }).toArray(),
+    db.collection('messages').find({}, { projection: { _id: 0 } }).sort({ createdAt: -1 }).limit(60).toArray()
+  ]);
+  const counts = await db.collection('messages').aggregate([{ $group: { _id: '$roomId', count: { $sum: 1 } } }]).toArray();
+  const messageCounts = Object.fromEntries(counts.map((item) => [item._id, item.count]));
+  return { users, rooms: rooms.map((room) => ({ ...room, messageCount: messageCounts[room.id] || 0 })), recentMessages };
 }
 
 export async function recordUser(username) {
