@@ -15,6 +15,13 @@ const currentMalaysiaTime = () => new Intl.DateTimeFormat('en-GB', {
 }).format(new Date());
 const CHRONOS_ROOT = '/chronos';
 const routeFor = (page = 'home', value = '') => page === 'auth' ? CHRONOS_ROOT : page === 'room' && value ? `${CHRONOS_ROOT}/lobby/${encodeURIComponent(value)}` : page === 'friend' && value ? `${CHRONOS_ROOT}/friend/${encodeURIComponent(value)}` : page === 'invite' ? `${CHRONOS_ROOT}/invite` : `${CHRONOS_ROOT}/${page}`;
+const NOTIFICATION_ICON = '/chronos-mark.svg';
+const canNotify = () => typeof window !== 'undefined' && 'Notification' in window;
+const sendDeviceNotice = ({ title = 'Chronos', body = '', tag = 'chronos', data = {} }) => {
+  if (!canNotify() || Notification.permission !== 'granted') return false;
+  try { new Notification(title, { body, tag, icon: NOTIFICATION_ICON, badge: NOTIFICATION_ICON, data, renotify: true }); return true; }
+  catch { return false; }
+};
 const parseChronosRoute = () => {
   const parts = window.location.pathname.split('/').filter(Boolean);
   const rootIndex = parts[0] === 'chronos' ? 1 : 0;
@@ -727,11 +734,18 @@ function AdminPage() {
 
 function Footer() { return <><BackToTop/><footer><Logo/><p>Make time feel like yours again.</p><span>© 2026 Chronos</span></footer></>; }
 
+function NotificationPrompt({ permission, onEnable, onDismiss }) {
+  if (!canNotify() || permission !== 'default') return null;
+  return <button className="notification-permission" onClick={onEnable}><i/><span><small>DEVICE ALERTS</small><b>Notify me about plans, messages, and requests</b></span><em onClick={(event) => { event.stopPropagation(); onDismiss(); }}>×</em></button>;
+}
+
 function App() {
   const [showIntro, setShowIntro] = useState(true);
   const [inviteReady, setInviteReady] = useState(false);
   const [social, setSocial] = useState(readSocial);
   const [username, setUsername] = useState(() => localStorage.getItem(SESSION_KEY) || '');
+  const [notificationPermission, setNotificationPermission] = useState(() => canNotify() ? Notification.permission : 'unsupported');
+  const [notificationDismissed, setNotificationDismissed] = useState(() => localStorage.getItem('chronos-notifications-dismissed-v1') === '1');
   const initialRoute = parseChronosRoute();
   const params = new URLSearchParams(window.location.search);
   const sharedName = params.get('view') || initialRoute.viewing || '';
@@ -741,13 +755,44 @@ function App() {
   const [room, setRoom] = useState(null);
   const currentRoomId = useRef(null);
   const [liveNotice, setLiveNotice] = useState(null);
+  const planAlerted = useRef(new Set());
   const idleTimer = useRef(null);
   const lastPresencePing = useRef(0);
   const lastLocationPing = useRef(0);
   const setPage = (next) => { setPageState(next); if (next === 'lobby' && liveNotice) window.setTimeout(() => document.querySelector(liveNotice.type === 'room-invite' ? '.live-rooms' : '.social-inbox')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 180); };
   const updateSocial = (update) => setSocial((current) => { const next = typeof update === 'function' ? update(current) : update; localStorage.setItem(SOCIAL_KEY, JSON.stringify(next)); return next; });
   const isAdmin = username && social.accounts[accountKey(username)]?.role === 'admin';
+  const enableNotifications = async () => {
+    if (!canNotify()) return setLiveNotice({ type: 'notice', copy: 'This browser does not support device notifications.' });
+    const result = await Notification.requestPermission();
+    setNotificationPermission(result);
+    localStorage.removeItem('chronos-notifications-dismissed-v1');
+    setNotificationDismissed(false);
+    if (result === 'granted') sendDeviceNotice({ title: 'Chronos alerts enabled', body: 'Plans, room messages, and friend requests can now reach this device.', tag: 'chronos-enabled' });
+  };
+  const dismissNotificationPrompt = () => { localStorage.setItem('chronos-notifications-dismissed-v1', '1'); setNotificationDismissed(true); };
   useEffect(() => { currentRoomId.current = page === 'room' ? room?.id || null : null; }, [page, room?.id]);
+  useEffect(() => {
+    if (!username) return;
+    const checkPlans = async () => {
+      const todayKey = today();
+      const plans = await fetch(api(`/api/plans?username=${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : []).catch(() => []);
+      const now = currentMalaysiaMinutes();
+      plans.filter((plan) => plan.date === todayKey && !plan.completed).forEach((plan) => {
+        const start = mins(plan.startTime);
+        const minutesAway = start - now;
+        if (minutesAway < 0 || minutesAway > 10) return;
+        const alertKey = `${plan.id}-${todayKey}-${plan.startTime}`;
+        if (planAlerted.current.has(alertKey)) return;
+        planAlerted.current.add(alertKey);
+        const body = minutesAway === 0 ? `${plan.title} starts now.` : `${plan.title} starts in ${minutesAway} min (${plan.startTime}).`;
+        if (!sendDeviceNotice({ title: 'Chronos plan reminder', body, tag: `plan-${plan.id}`, data: { type: 'plan', planId: plan.id } })) setLiveNotice({ type: 'plan-reminder', copy: body });
+      });
+    };
+    checkPlans();
+    const timer = window.setInterval(checkPlans, 60000);
+    return () => window.clearInterval(timer);
+  }, [username]);
   const syncSocial = () => {
     if (!username) return Promise.resolve();
     return fetch(api(`/api/social/${encodeURIComponent(username)}`)).then((response) => response.ok ? response.json() : null).then((remote) => {
@@ -799,7 +844,14 @@ function App() {
           ? current
           : { ...current, notifications: [{ id: `message-${payload.roomId}-${Date.now()}`, type: 'room-message', to: accountKey(username), from: accountKey(payload.from), roomId: payload.roomId, roomName: payload.roomName, read: false, createdAt: Date.now() }, ...current.notifications] });
       }
-      if (copy && !(signal.type === 'room-message-notice' && currentRoomId.current === payload.roomId)) setLiveNotice({ ...signal, copy });
+      if (copy && !(signal.type === 'room-message-notice' && currentRoomId.current === payload.roomId)) {
+        const title = signal.type === 'friend-request' ? 'New Chronos friend request'
+          : signal.type === 'room-invite' ? 'New Chronos room invite'
+          : signal.type === 'room-message-notice' ? `New message in ${payload.roomName || 'a Chronos room'}`
+          : 'Chronos update';
+        sendDeviceNotice({ title, body: copy, tag: signal.type === 'room-message-notice' ? `room-${payload.roomId}` : signal.type, data: payload });
+        setLiveNotice({ ...signal, copy });
+      }
     };
     return () => stream.close();
   }, [username]);
@@ -813,7 +865,7 @@ function App() {
   const backToMine = () => { setViewing(''); replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); };
   const logout = () => { const key = accountKey(username); updateSocial((current) => current.accounts[key] ? ({ ...current, accounts: { ...current.accounts, [key]: { ...current.accounts[key], online: false, lastSeen: Date.now() } } }) : current); localStorage.removeItem(SESSION_KEY); setUsername(''); setViewing(''); setRoom(null); replaceChronosRoute('auth'); setPage('auth'); };
   const navigate = (next) => { setViewing(''); pushChronosRoute(next); setPage(next); };
-  return <div className="app-shell">{showIntro && <IntroSequence onDeparting={() => { if (page === 'invite') setInviteReady(true); }} onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} {page === 'invite' ? <InvitePage ready={inviteReady || !showIntro} onJoin={() => { replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); }}/> : page === 'admin' ? <AdminPage/> : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/> : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
+  return <div className="app-shell">{showIntro && <IntroSequence onDeparting={() => { if (page === 'invite') setInviteReady(true); }} onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} {page === 'invite' ? <InvitePage ready={inviteReady || !showIntro} onJoin={() => { replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); }}/> : page === 'admin' ? <AdminPage/> : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/> : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {username && !notificationDismissed && <NotificationPrompt permission={notificationPermission} onEnable={enableNotifications} onDismiss={dismissNotificationPrompt}/>} {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
 }
 
 createRoot(document.getElementById('root')).render(<><App/><ChronosDialogHost/></>);
