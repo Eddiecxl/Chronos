@@ -294,6 +294,7 @@ body{overflow-x:hidden;background:#07090e}
 body.intro-active{overflow:hidden}
 body.intro-active .app-shell>.ambient-stage,body.intro-active .app-shell>.header,body.intro-active .app-shell>main,body.intro-active .app-shell>footer{visibility:hidden}
 .intro-screen{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;overflow:hidden;background:#05070b;color:#f6f2e8;isolation:isolate}
+.intro-screen.intro-departing{background:transparent;pointer-events:none}
 .intro-panel{position:absolute;top:0;bottom:0;width:50.1%;z-index:8;background:#07090e;transition:transform .8s cubic-bezier(.76,0,.24,1);will-change:transform}
 .intro-panel-left{left:0;border-right:1px solid rgba(201,169,110,.22)}
 .intro-panel-right{right:0;border-left:1px solid rgba(201,169,110,.22)}
