@@ -550,3 +550,12 @@ html{font-size:clamp(14px,.35vw + 12.5px,18px);overflow-x:hidden}body{min-width:
 @keyframes inviteLetterReveal{0%,24%{opacity:0;transform:translateY(34%) scale(.96)}48%,100%{opacity:1;transform:translateY(-18%) scale(1)}}
 @keyframes inviteFlapReveal{0%,22%{transform:rotateX(0);z-index:6}48%,100%{transform:rotateX(178deg);z-index:1}}
 @keyframes inviteCopyRise{0%,42%{opacity:0;transform:translateY(22px)}68%,100%{opacity:1;transform:none}}
+
+/* Outstanding overlap design for planner timeline */
+.orbit-block{display:flex!important;flex-direction:column;justify-content:center;gap:4px!important}.orbit-block:after{display:none!important}.orbit-block span{padding-right:0!important;line-height:1.15!important}.orbit-block small{width:max-content;max-width:100%;margin-top:0!important}
+.orbit-block.is-overlap{isolation:isolate;border-color:#ffb0a6!important;background:linear-gradient(135deg,#b94d50 0%,#6b252b 48%,#24171a 100%)!important;box-shadow:0 0 0 1px rgba(255,185,170,.25),0 16px 44px rgba(0,0,0,.5),0 0 34px rgba(255,115,105,.2)!important}
+.orbit-block.is-overlap:before{content:''!important;position:absolute;inset:0!important;background:linear-gradient(110deg,transparent 0 58%,rgba(255,255,255,.16) 58% 62%,transparent 62% 100%)!important;opacity:.7;pointer-events:none}
+.orbit-conflict-badge{align-self:flex-start;border:1px solid rgba(255,220,205,.45);background:rgba(20,12,13,.48);color:#ffe0c9;font:800 6px/1 'Manrope';letter-spacing:.16em;padding:4px 6px;border-radius:999px;box-shadow:0 0 16px rgba(255,160,132,.18)}
+.orbit-block.is-overlap span{font-size:12px!important;letter-spacing:-.01em;color:#fff7ef!important;text-shadow:0 2px 10px rgba(0,0,0,.7)}
+.orbit-block.is-overlap small{border-color:rgba(255,220,205,.34)!important;background:rgba(0,0,0,.28)!important;color:#ffd7a0!important}
+@media(max-width:700px){.orbit-conflict-badge{font-size:5px;padding:3px 5px}.orbit-block.is-overlap span{font-size:9px!important}.orbit-block.is-overlap small{font-size:6px!important;padding:2px 5px!important}.orbit-block{gap:3px!important}}
