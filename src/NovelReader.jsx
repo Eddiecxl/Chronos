@@ -24,11 +24,15 @@ export default function NovelReader() {
   const [chrome, setChrome] = useState(true);
   const [panel, setPanel] = useState('');
   const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 900px)').matches);
+  const [chapterMotion, setChapterMotion] = useState('');
+  const [pageSettling, setPageSettling] = useState(false);
   const viewportRef = useRef(null);
   const flowRef = useRef(null);
   const gestureRef = useRef({ x: 0, y: 0 });
   const suppressClickRef = useRef(false);
   const pendingLastPageRef = useRef(false);
+  const chapterTimersRef = useRef([]);
+  const pageTimerRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -51,6 +55,11 @@ export default function NovelReader() {
     const updateLayout = () => setIsMobile(media.matches);
     media.addEventListener('change', updateLayout);
     return () => media.removeEventListener('change', updateLayout);
+  }, []);
+
+  useEffect(() => () => {
+    chapterTimersRef.current.forEach(window.clearTimeout);
+    window.clearTimeout(pageTimerRef.current);
   }, []);
 
   const chapter = novel?.chapters?.[chapterIndex];
@@ -109,20 +118,45 @@ export default function NovelReader() {
   });
 
   const openChapter = (index, atEnd = false) => {
-    if (!novel?.chapters?.[index]) return;
-    pendingLastPageRef.current = atEnd;
-    setChapterIndex(index);
-    setPageIndex(0);
-    setPanel('');
+    if (!novel?.chapters?.[index] || index === chapterIndex || chapterMotion) return;
+    const commit = () => {
+      pendingLastPageRef.current = atEnd;
+      setChapterIndex(index);
+      setPageIndex(0);
+      setPanel('');
+      window.dispatchEvent(new Event('chronos-reader-nav-hide'));
+    };
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      commit();
+      return;
+    }
+    chapterTimersRef.current.forEach(window.clearTimeout);
+    setChapterMotion('is-leaving');
+    const leaveTimer = window.setTimeout(() => {
+      commit();
+      setChapterMotion('is-entering');
+      const enterTimer = window.setTimeout(() => setChapterMotion(''), 360);
+      chapterTimersRef.current = [enterTimer];
+    }, 140);
+    chapterTimersRef.current = [leaveTimer];
+  };
+
+  const turnToPage = (index) => {
+    setPageSettling(false);
+    setPageIndex(index);
+    window.dispatchEvent(new Event('chronos-reader-nav-hide'));
+    window.clearTimeout(pageTimerRef.current);
+    requestAnimationFrame(() => setPageSettling(true));
+    pageTimerRef.current = window.setTimeout(() => setPageSettling(false), 220);
   };
 
   const nextPage = () => {
-    if (pageIndex + 1 < pageCount) setPageIndex((current) => current + 1);
+    if (pageIndex + 1 < pageCount) turnToPage(pageIndex + 1);
     else openChapter(chapterIndex + 1);
   };
 
   const previousPage = () => {
-    if (pageIndex > 0) setPageIndex((current) => current - 1);
+    if (pageIndex > 0) turnToPage(pageIndex - 1);
     else openChapter(chapterIndex - 1, true);
   };
 
@@ -135,7 +169,10 @@ export default function NovelReader() {
     const position = (event.clientX - bounds.left) / bounds.width;
     if (position < .38) previousPage();
     else if (position > .62) nextPage();
-    else setChrome((current) => !current);
+    else {
+      setChrome((current) => !current);
+      window.dispatchEvent(new Event('chronos-reader-nav-show'));
+    }
   };
 
   const startGesture = (event) => {
@@ -167,7 +204,7 @@ export default function NovelReader() {
     </div>
 
     <section
-      className="reader-page-stage"
+      className={`reader-page-stage ${chapterMotion} ${pageSettling ? 'page-settling' : ''}`}
       onClick={handlePageClick}
       onPointerDown={startGesture}
       onPointerUp={finishGesture}
@@ -180,6 +217,11 @@ export default function NovelReader() {
       </div>
       {isMobile && <div className="reader-tap-hint" aria-hidden="true"><i>‹</i><span>Tap pages · Swipe chapters</span><i>›</i></div>}
     </section>
+
+    {!isMobile && <nav className="reader-chapter-nav" aria-label="Chapter navigation">
+      <button className="reader-chapter-previous" disabled={chapterIndex === 0 || Boolean(chapterMotion)} onClick={previousChapter} aria-label="Previous chapter"><span>←</span><small>Previous<br/>chapter</small></button>
+      <button className="reader-chapter-next" disabled={chapterIndex === novel.chapters.length - 1 || Boolean(chapterMotion)} onClick={nextChapter} aria-label="Next chapter"><small>Next<br/>chapter</small><span>→</span></button>
+    </nav>}
 
     <div className={`reader-chrome reader-chrome-bottom ${chrome ? '' : 'is-hidden'}`}>
       <span>{overallProgress}%</span>

@@ -185,12 +185,43 @@ function Header({ page, setPage, username, logout, isAdmin = false, unreadCount 
 }
 
 function MobileNav({ page, setPage, unreadCount = 0 }) {
-  return <nav className="mobile-nav" aria-label="Primary navigation">
-    <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><span>Today</span><small>Overview</small></button>
-    <button className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}><span>Plan</span><small>Planner</small></button>
-    <button className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}><span>Read</span><small>Novel</small></button>
-    <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}><span>Circle {unreadCount > 0 && <b>{unreadCount}</b>}</span><small>Lobby</small></button>
-  </nav>;
+  const [visible, setVisible] = useState(true);
+  const hideTimer = useRef(null);
+  const reveal = () => {
+    setVisible(true);
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setVisible(false), 3200);
+  };
+  useEffect(() => {
+    let lastScrollY = window.scrollY;
+    reveal();
+    const hide = () => { window.clearTimeout(hideTimer.current); setVisible(false); };
+    const onScroll = () => {
+      const nextScrollY = window.scrollY;
+      if (nextScrollY > lastScrollY + 8) hide();
+      else if (nextScrollY < lastScrollY - 8) reveal();
+      lastScrollY = nextScrollY;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('chronos-reader-nav-hide', hide);
+    window.addEventListener('chronos-reader-nav-show', reveal);
+    return () => {
+      window.clearTimeout(hideTimer.current);
+      window.removeEventListener('scroll', onScroll);
+      window.removeEventListener('chronos-reader-nav-hide', hide);
+      window.removeEventListener('chronos-reader-nav-show', reveal);
+    };
+  }, [page]);
+  const navTabIndex = visible ? 0 : -1;
+  return <>
+    <nav className={`mobile-nav ${visible ? '' : 'is-auto-hidden'}`} aria-label="Primary navigation" aria-hidden={!visible}>
+      <button tabIndex={navTabIndex} className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><span>Today</span><small>Overview</small></button>
+      <button tabIndex={navTabIndex} className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}><span>Plan</span><small>Planner</small></button>
+      <button tabIndex={navTabIndex} className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}><span>Read</span><small>Novel</small></button>
+      <button tabIndex={navTabIndex} className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}><span>Circle {unreadCount > 0 && <b>{unreadCount}</b>}</span><small>Lobby</small></button>
+    </nav>
+    {!visible && <button className="mobile-nav-reveal" onClick={reveal} aria-label="Show page navigation"><span/></button>}
+  </>;
 }
 
 const seedFriends = [
