@@ -3,8 +3,8 @@ services:
     name: chronos-planner
     runtime: node
     plan: free
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm run build
+    startCommand: pnpm start
     healthCheckPath: /api/health
     envVars:
       - key: NODE_VERSION
@@ -14,4 +14,12 @@ services:
       - key: MONGODB_DB
         value: chronos
       - key: CLIENT_ORIGIN
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: ADMIN_PIN
         sync: false

@@ -1,11 +1,33 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
 import './styles.css';
+import './productivity.css';
+import './reader.css';
+import NovelReader from './NovelReader.jsx';
 
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const api = (path) => `${API_URL}${path}`;
+const SESSION_TOKEN_KEY = 'chronos-session-token-v1';
+const getSessionToken = () => localStorage.getItem(SESSION_TOKEN_KEY) || '';
+const nativeFetch = window.fetch.bind(window);
+const fetch = (input, options = {}) => {
+  const token = getSessionToken();
+  const isChronosApi = typeof input === 'string' && input.includes('/api/');
+  return nativeFetch(input, {
+    ...options,
+    headers: { ...(isChronosApi && token ? { Authorization: `Bearer ${token}` } : {}), ...(options.headers || {}) }
+  });
+};
+const NativeEventSource = window.EventSource;
+const EventSource = class ChronosEventSource extends NativeEventSource {
+  constructor(url, options) {
+    const token = getSessionToken();
+    const securedUrl = token && typeof url === 'string' && url.includes('/api/')
+      ? `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`
+      : url;
+    super(securedUrl, options);
+  }
+};
 const MALAYSIA_TIME_ZONE = 'Asia/Kuala_Lumpur';
 const currentMalaysiaTime = () => new Intl.DateTimeFormat('en-GB', {
   timeZone: MALAYSIA_TIME_ZONE,
@@ -27,7 +49,7 @@ const parseChronosRoute = () => {
   const rootIndex = parts[0] === 'chronos' ? 1 : 0;
   const area = parts[rootIndex] || '';
   if (area === 'lobby' && parts[rootIndex + 1]) return { page: 'room', roomId: decodeURIComponent(parts[rootIndex + 1]) };
-  if (['home', 'planner', 'lobby', 'admin', 'invite'].includes(area)) return { page: area };
+  if (['home', 'planner', 'reader', 'lobby', 'admin', 'invite'].includes(area)) return { page: area };
   if (area === 'friend' && parts[rootIndex + 1]) return { page: 'friend', viewing: decodeURIComponent(parts[rootIndex + 1]) };
   return { page: '' };
 };
@@ -38,8 +60,11 @@ const Icons = {
   arrow: '↗', check: '✓', clock: '◷', plus: '+', trash: '×', spark: '✦', calendar: '□'
 };
 
+const FriendRadar = React.lazy(() => import('./FriendRadar.jsx'));
 const SOCIAL_KEY = 'chronos-social-v2';
 const SESSION_KEY = 'chronos-session-v2';
+const INTRO_KEY = 'chronos-welcome-seen-v1';
+const LOCATION_SHARING_KEY = 'chronos-location-sharing-v1';
 const emptySocial = () => ({ accounts: {}, requests: [], notifications: [], rooms: [] });
 const readSocial = () => {
   try { return { ...emptySocial(), ...JSON.parse(localStorage.getItem(SOCIAL_KEY) || '{}') }; }
@@ -110,8 +135,8 @@ function IntroSequence({ onComplete, onDeparting }) {
   useEffect(() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     document.body.classList.add('intro-active');
-    const departureTimer = window.setTimeout(() => { setDeparting(true); departingRef.current?.(); }, reduced ? 180 : 4200);
-    const completeTimer = window.setTimeout(() => completeRef.current?.(), reduced ? 700 : 5000);
+    const departureTimer = window.setTimeout(() => { setDeparting(true); departingRef.current?.(); }, reduced ? 120 : 850);
+    const completeTimer = window.setTimeout(() => { localStorage.setItem(INTRO_KEY, '1'); completeRef.current?.(); }, reduced ? 260 : 1250);
     return () => {
       window.clearTimeout(departureTimer);
       window.clearTimeout(completeTimer);
@@ -124,7 +149,7 @@ function IntroSequence({ onComplete, onDeparting }) {
   const skip = () => {
     setDeparting(true);
     departingRef.current?.();
-    window.setTimeout(() => completeRef.current?.(), 650);
+    window.setTimeout(() => { localStorage.setItem(INTRO_KEY, '1'); completeRef.current?.(); }, 180);
   };
   return <div className={`intro-screen ${departing ? 'intro-departing' : ''}`} role="dialog" aria-label="Welcome to Chronos" aria-modal="true">
     <div className="intro-panel intro-panel-left"/><div className="intro-panel intro-panel-right"/>
@@ -137,7 +162,7 @@ function IntroSequence({ onComplete, onDeparting }) {
       <p>Your time. <em>Elevated.</em></p>
       <div className="intro-coordinate"><span>KUALA LUMPUR</span><b>{currentMalaysiaTime()} MYT</b></div>
     </div>
-    <div className="intro-footer"><span>ENTERING YOUR TIME</span><div className="intro-progress"><i/></div><b>05</b></div>
+    <div className="intro-footer"><span>PREPARING YOUR PLANNER</span><div className="intro-progress"><i/></div><b>01</b></div>
     <button className="intro-skip" onClick={skip}>Skip intro <span>↗</span></button>
   </div>;
 }
@@ -149,13 +174,23 @@ function BackToTop() {
   return <button className={`back-to-top ${visible ? 'visible' : ''}`} style={{ '--scroll-progress': `${progress * 3.6}deg` }} onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="Back to top"><span>↑</span><small>TOP</small></button>;
 }
 
-function Header({ page, setPage, username, logout, isAdmin = false }) {
-  return <header className="header"><Logo onClick={() => setPage('home')}/><nav>
+function Header({ page, setPage, username, logout, isAdmin = false, unreadCount = 0 }) {
+  return <><header className="header"><Logo onClick={() => setPage('home')}/><nav>
     <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}>Overview</button>
     {username && <button className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}>Planner</button>}
-    {username && <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}>Lobby</button>}
+    {username && <button className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}>Reader</button>}
+    {username && <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}>Lobby {unreadCount > 0 && <b className="nav-badge">{unreadCount}</b>}</button>}
     {isAdmin && <button className={page === 'admin' ? 'active' : ''} onClick={() => setPage('admin')}>Admin</button>}
-  </nav><div className="header-user">{username ? <><span className="online-dot"/>{username}<button className="text-button" onClick={logout}>Exit</button></> : <span>24 hours. Intentionally.</span>}</div></header>;
+  </nav><div className="header-user">{username ? <><span className="online-dot"/>{username}<button className="text-button" onClick={logout}>Exit</button></> : <span>24 hours. Intentionally.</span>}</div></header>{username && <MobileNav page={page} setPage={setPage} unreadCount={unreadCount}/>}</>;
+}
+
+function MobileNav({ page, setPage, unreadCount = 0 }) {
+  return <nav className="mobile-nav" aria-label="Primary navigation">
+    <button className={page === 'home' ? 'active' : ''} onClick={() => setPage('home')}><span>Today</span><small>Overview</small></button>
+    <button className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}><span>Plan</span><small>Planner</small></button>
+    <button className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}><span>Read</span><small>Novel</small></button>
+    <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}><span>Circle {unreadCount > 0 && <b>{unreadCount}</b>}</span><small>Lobby</small></button>
+  </nav>;
 }
 
 const seedFriends = [
@@ -416,15 +451,16 @@ function AuthScreen({ social, updateSocial, onLogin }) {
     if (!form.username.trim()) return setError('Enter your username.');
     if (!/^[A-Za-z0-9_.-]{3,24}$/.test(form.username)) return setError('Use 3–24 letters, numbers, _, - or . with no spaces.');
     if (mode === 'register') {
-      if (form.password.length < 6) return setError('Use at least 6 characters for your password.');
+      if (form.password.length < 8) return setError('Use at least 8 characters for your password.');
       if (!/^\d{3}$/.test(form.pin)) return setError('Your login PIN must be exactly 3 numbers.');
       try {
         const availabilityResponse = await fetch(api(`/api/accounts/${encodeURIComponent(form.username.trim())}/exists`));
         if (availabilityResponse.ok && (await availabilityResponse.json()).exists) return setError('That username is already registered. Choose another one.');
         const response = await fetch(api('/api/accounts/register'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.username.trim(), password: form.password, pin: form.pin }) });
         const result = await response.json(); if (!response.ok) return setError(result.error || 'Could not create account.');
-        const next = { ...result, friends: result.friends || [], online: true, lastSeen: Date.now() };
-        updateSocial((current) => ({ ...current, accounts: { ...current.accounts, [key]: next } })); onLogin(next.username); return;
+        const { token, ...account } = result;
+        const next = { ...account, friends: account.friends || [], online: true, lastSeen: Date.now() };
+        updateSocial((current) => ({ ...current, accounts: { ...current.accounts, [key]: next } })); onLogin(next.username, token); return;
       } catch { return setError('Chronos could not reach the server. Start Chronos again, then retry.'); }
     }
     if (mode === 'reset') {
@@ -434,13 +470,30 @@ function AuthScreen({ social, updateSocial, onLogin }) {
       setMode('login'); setForm((current) => ({ ...current, pin: current.newPin, password: '', newPin: '' })); setError('PIN reset. You can sign in now.'); return;
     }
     if (!/^\d{3}$/.test(form.pin)) return setError('Username or 3-number PIN is incorrect.');
-    try { const response = await fetch(api('/api/accounts/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.username.trim(), pin: form.pin }) }); const result = await response.json(); if (!response.ok) return setError(result.error || 'Could not sign in.'); updateSocial((current) => ({ ...current, accounts: { ...current.accounts, [key]: { ...result, lastSeen: Date.now() } } })); onLogin(result.username); }
+    try { const response = await fetch(api('/api/accounts/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: form.username.trim(), pin: form.pin }) }); const result = await response.json(); if (!response.ok) return setError(result.error || 'Could not sign in.'); const { token, ...account } = result; updateSocial((current) => ({ ...current, accounts: { ...current.accounts, [key]: { ...account, lastSeen: Date.now() } } })); onLogin(account.username, token); }
     catch { setError('Chronos could not reach the server. Start Chronos again, then retry.'); }
   };
   return <main className="auth-page"><section className="auth-visual"><div className="auth-orbit"><i/><i/><b>C</b></div><span>CHRONOS IDENTITY</span><h1>Your time.<br/><em>Your circle.</em></h1><p>One private identity for plans, friendships, invitations, and every room in your orbit.</p><div className="auth-trust"><b>03</b><span>numbers unlock your everyday Chronos</span></div></section><section className="auth-card"><div className="auth-tabs"><button className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>Sign in</button><button className={mode === 'register' ? 'active' : ''} onClick={() => { setMode('register'); setError(''); }}>Create account</button></div><span>{mode === 'register' ? 'CREATE YOUR CHRONOS ID' : mode === 'reset' ? 'SECURE PIN RESET' : 'WELCOME BACK'}</span><h2>{mode === 'register' ? 'Begin your orbit.' : mode === 'reset' ? 'Choose new numbers.' : 'Enter Chronos.'}</h2><form onSubmit={submit}><label>Display username<input autoComplete="username" value={form.username} onChange={(event) => update('username', event.target.value)} placeholder="Your unique name" maxLength="40"/></label>{mode === 'register' && <label>Password<input type="password" autoComplete="new-password" value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="At least 6 characters"/></label>}{mode === 'reset' && <><label>Account password<input type="password" autoComplete="current-password" value={form.password} onChange={(event) => update('password', event.target.value)} placeholder="Verify your password"/></label><label>New 3-number PIN<input className="pin-input" inputMode="numeric" type="password" value={form.newPin} onChange={(event) => update('newPin', event.target.value)} placeholder="•••"/></label></>}{mode !== 'reset' && <label>Your 3-number PIN<input className="pin-input" inputMode="numeric" type="password" autoComplete={mode === 'login' ? 'current-password' : 'new-password'} value={form.pin} onChange={(event) => update('pin', event.target.value)} placeholder="•••"/></label>}{error && <div className={error.startsWith('PIN reset') ? 'form-success' : 'form-error'}>{error}</div>}<button className="gold-button auth-submit">{mode === 'register' ? 'Create account' : mode === 'reset' ? 'Reset PIN' : 'Sign in'} <span>↗</span></button></form>{mode === 'login' && <button className="forgot-pin" onClick={() => { setMode('reset'); setError(''); }}>Forgot your 3 numbers? Reset with password</button>}{mode === 'reset' && <button className="forgot-pin" onClick={() => setMode('login')}>← Back to sign in</button>}<small>Your password is used only for PIN recovery. Your everyday login is username + 3 numbers.</small></section></main>;
 }
 
-function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
+function TodayDashboard({ username, plans, onOpenPlanner, onOpenLobby }) {
+  const [locationSharing, setLocationSharing] = useState(() => localStorage.getItem(LOCATION_SHARING_KEY) === '1');
+  const dayPlans = useMemo(() => plans.filter((plan) => plan.date === today()).sort((a, b) => a.startTime.localeCompare(b.startTime)), [plans]);
+  const upcoming = useMemo(() => dayPlans.find((plan) => !plan.completed && mins(plan.endTime) > currentMalaysiaMinutes()) || dayPlans.find((plan) => !plan.completed), [dayPlans]);
+  const completed = dayPlans.filter((plan) => plan.completed).length;
+  const plannedMinutes = dayPlans.reduce((total, plan) => total + Math.max(0, mins(plan.endTime) - mins(plan.startTime)), 0);
+  const completion = dayPlans.length ? Math.round(completed / dayPlans.length * 100) : 0;
+  return <section className="today-dashboard">
+    <div className="today-dashboard-copy"><div className="eyebrow"><span>✦</span> Today, in focus</div><h1>Make the next hour <em>count.</em></h1><p>{upcoming ? <><b>Up next:</b> {upcoming.title} · {formatTime(upcoming.startTime)}–{formatTime(upcoming.endTime)}</> : 'Your day is open. Start with one meaningful block of time.'}</p><div className="today-dashboard-actions"><button className="gold-button" onClick={onOpenPlanner}>Plan my day <span>→</span></button><button className="secondary-button" onClick={onOpenLobby}>Open my circle</button></div></div>
+    <div className="today-dashboard-grid">
+      <article><span>Today’s progress</span><b>{completion}<small>%</small></b><p>{completed} of {dayPlans.length} plans complete</p><i><em style={{ width: `${completion}%` }}/></i></article>
+      <article><span>Time reserved</span><b>{Math.floor(plannedMinutes / 60)}<small>h</small> {plannedMinutes % 60}<small>m</small></b><p>{Math.max(0, 24 - Math.round(plannedMinutes / 60))} hours still flexible</p></article>
+      <article className="privacy-card"><span>Live location</span><b>{locationSharing ? 'Sharing' : 'Private'}</b><p>{locationSharing ? 'Your approved friends can see your live signal.' : 'Location stays off until you choose to share it.'}</p><button onClick={() => { const next = !locationSharing; setLocationSharing(next); window.dispatchEvent(new CustomEvent('chronos-location-sharing', { detail: next })); }}>{locationSharing ? 'Stop sharing' : 'Share with friends'}</button></article>
+    </div>
+  </section>;
+}
+
+function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby, locationSharing, onToggleLocation }) {
   const [name, setName] = useState('');
   const [friend, setFriend] = useState('');
   const [error, setError] = useState('');
@@ -474,7 +527,8 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
     onEnter(name.trim());
   };
   return <main>
-    <section className="hero">
+    {username && <TodayDashboard username={username} plans={homePlans} onOpenPlanner={onOpenPlanner} onOpenLobby={onOpenLobby} locationSharing={locationSharing} onToggleLocation={onToggleLocation}/>} 
+    {!username && <><section className="hero">
       <div className="hero-copy"><div className="eyebrow"><span>{Icons.spark}</span> Personal time intelligence</div>
         <h1>Your day deserves<br/><em>better architecture.</em></h1>
         <p>Chronos turns a crowded day into a calm, deliberate system. See every hour, protect your focus, and move with intention.</p>
@@ -494,18 +548,22 @@ function Home({ username, onEnter, onViewFriend, onOpenPlanner, onOpenLobby }) {
         <div className="hero-coordinate"><span>NO SAMPLE EVENTS</span><b>ONLY YOUR CHRONOS DATA</b></div>
         <div className="chrono-signature"><span>CHRONOS / 01</span><i/></div>
       </div>
-    </section>
+    </section></>}
     {username && <section className="home-live-plans"><header><div><span>LIVE PLANNING / NOW</span><h2>Your next moments.</h2><p>Today takes priority, then Chronos carries your focus forward.</p></div><button className="secondary-button" onClick={onOpenPlanner}>View full planner <span>→</span></button></header><div className="home-plan-stream">{upcomingPlans.map((plan, index) => { const urgent = plan.priority === 'High' || plan.priority === 'Emergency'; const dayLabel = plan.date === today() ? 'TODAY' : new Date(`${plan.date}T12:00:00`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase(); return <article className={urgent ? 'is-urgent' : ''} key={plan.id}><div className="home-plan-index">{String(index + 1).padStart(2, '0')}</div><div className="home-plan-date"><span>{dayLabel}</span><b>{plan.startTime === '00:00' && plan.endTime === '23:59' ? 'ALL DAY' : `${plan.startTime}–${plan.endTime}`}</b></div><div className="home-plan-copy"><small>{plan.category || 'PLAN'} · {plan.status || 'Busy'}</small><h3>{plan.title}</h3>{plan.notes && <p>{plan.notes}</p>}</div><div className={`home-priority priority-${(plan.priority || 'None').toLowerCase()}`}>{urgent && <i/>}{plan.priority && plan.priority !== 'None' ? plan.priority : 'No priority'}</div></article>})}{!upcomingPlans.length && <div className="home-plans-empty"><span>◇</span><h3>Your horizon is clear.</h3><p>No plans are scheduled from today onward.</p><button className="gold-button" onClick={onOpenPlanner}>Create your first plan <span>↗</span></button></div>}</div></section>}
     <div className="luxury-marquee" aria-hidden="true"><div><span>INTENTION</span><i>✦</i><span>CLARITY</span><i>✦</i><span>FOCUS</span><i>✦</i><span>CONNECTION</span><i>✦</i><span>INTENTION</span><i>✦</i><span>CLARITY</span><i>✦</i><span>FOCUS</span><i>✦</i><span>CONNECTION</span><i>✦</i></div></div>
-    <section className="statement"><div className="statement-gem">C</div><span>THE CHRONOS METHOD</span><h2>Less scheduling.<br/>More <em>living on purpose.</em></h2><p>A refined view of the one resource you cannot replenish.</p><div className="statement-rule"><i/><span>EST. 2026</span><i/></div></section>
+    {!username && <><section className="statement"><div className="statement-gem">C</div><span>THE CHRONOS METHOD</span><h2>Less scheduling.<br/>More <em>living on purpose.</em></h2><p>A refined view of the one resource you cannot replenish.</p><div className="statement-rule"><i/><span>EST. 2026</span><i/></div></section>
     <section className="features">
       {[['01','Map every hour','A complete 24-hour canvas makes the invisible visible.'],['02','Protect your energy','Balance focused work, recovery, and everything between.'],['03','Finish with clarity','Track progress without turning your life into a spreadsheet.']].map(([n,t,d]) => <article key={n}><span>{n}</span><div className="feature-line"/><h3>{t}</h3><p>{d}</p></article>)}
-    </section>
+    </section></>}
   </main>;
 }
 
 const today = () => new Intl.DateTimeFormat('en-CA', { timeZone: MALAYSIA_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-const emptyForm = () => ({ title: '', date: today(), startTime: '00:00', endTime: '23:59', category: 'Personal', status: 'Busy', priority: 'None', notes: '', location: '' });
+const defaultPlanTimes = () => {
+  const start = Math.min(1380, Math.ceil(currentMalaysiaMinutes() / 15) * 15);
+  return { startTime: minuteLabel(start), endTime: minuteLabel(Math.min(1439, start + 60)) };
+};
+const emptyForm = () => ({ title: '', date: today(), ...defaultPlanTimes(), category: 'Personal', status: 'Busy', priority: 'None', notes: '', location: '' });
 const mins = (time) => Number(time.slice(0,2)) * 60 + Number(time.slice(3));
 const formatTime = (time) => new Date(`2000-01-01T${time}`).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 const shiftDate = (date, days) => new Date(new Date(`${date}T12:00:00+08:00`).getTime() + days * 86400000).toISOString().slice(0,10);
@@ -554,7 +612,31 @@ function LegacyPlanModal({ close, save, existing }) {
   </section></div>;
 }
 
-function PlanModal({ close, save, existing }) {
+function PlanModal({ close, save, existing = [], plan = null }) {
+  const [form, setForm] = useState(() => ({ ...emptyForm(), ...(plan || {}) }));
+  const [advanced, setAdvanced] = useState(Boolean(plan));
+  const [allDay, setAllDay] = useState(() => plan?.startTime === '00:00' && plan?.endTime === '23:59');
+  const [error, setError] = useState('');
+  const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const toggleAllDay = (enabled) => {
+    setAllDay(enabled);
+    if (enabled) setForm((current) => ({ ...current, startTime: '00:00', endTime: '23:59' }));
+    else setForm((current) => ({ ...current, ...defaultPlanTimes() }));
+  };
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!form.title.trim()) return setError('Give this plan a clear name.');
+    if (!allDay && mins(form.endTime) <= mins(form.startTime)) return setError('End time must be later than start time.');
+    const payload = { ...form, title: form.title.trim(), ...(allDay ? { startTime: '00:00', endTime: '23:59' } : {}) };
+    const conflict = existing.some((item) => item.id !== plan?.id && item.date === payload.date && mins(payload.startTime) < mins(item.endTime) && mins(payload.endTime) > mins(item.startTime));
+    if (conflict && !(await chronosConfirm({ tone: 'warning', title: 'This overlaps another plan', message: 'Keep this timing anyway, or go back to adjust it.', confirmLabel: 'Keep overlap' }))) return;
+    const { id, username, completed, ...details } = payload;
+    await save(details);
+  };
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && close()}><section className={`modal plan-composer ${advanced ? 'is-advanced' : 'is-simple'}`} role="dialog" aria-modal="true" aria-labelledby="plan-modal-title"><button className="modal-close" aria-label="Close plan editor" onClick={close}>×</button><div className="eyebrow"><span>✦</span> {plan ? 'Plan details' : 'Quick plan'}</div><h2 id="plan-modal-title">{plan ? 'Keep the day moving.' : 'What needs your time?'}</h2><p>{plan ? 'Update the time, priority, and context without losing your place.' : 'Start with a useful time block. Add details only when you need them.'}</p><form onSubmit={submit}><label className="wide">Plan name<input autoFocus value={form.title} onChange={(event) => { update('title', event.target.value); setError(''); }} placeholder="e.g. Finish project proposal" maxLength="80"/></label><div className="simple-plan-grid"><label>Date<input type="date" value={form.date} onChange={(event) => update('date', event.target.value)}/></label><label>Priority<select value={form.priority} onChange={(event) => update('priority', event.target.value)}><option>None</option><option>Low</option><option>Medium</option><option>High</option><option>Emergency</option></select></label><label>Starts (MYT)<input disabled={allDay} type="time" value={form.startTime} onChange={(event) => update('startTime', event.target.value)}/></label><label>Ends (MYT)<input disabled={allDay} type="time" value={form.endTime} onChange={(event) => update('endTime', event.target.value)}/></label></div><label className="all-day-toggle"><input type="checkbox" checked={allDay} onChange={(event) => toggleAllDay(event.target.checked)}/><span><b>All day</b><small>Reserve the full day instead of a timed block.</small></span></label>{advanced && <div className="advanced-fields"><div className="form-grid"><label>Category<select value={form.category} onChange={(event) => update('category', event.target.value)}><option>Personal</option><option>Gaming</option><option>Focus</option><option>Meeting</option><option>Health</option><option>Learning</option></select></label><label>Availability<select value={form.status} onChange={(event) => update('status', event.target.value)}><option>Busy</option><option>Free</option><option>Gaming</option></select></label></div><label>Location <span>(optional)</span><input value={form.location} onChange={(event) => update('location', event.target.value)} placeholder="e.g. Home, KLCC, Discord" maxLength="100"/></label><label>Notes <span>(optional)</span><textarea value={form.notes} onChange={(event) => update('notes', event.target.value)} placeholder="Add useful context…" maxLength="300"/></label></div>}{(form.priority === 'High' || form.priority === 'Emergency') && <div className="priority-alert"><i>!</i><div><b>{form.priority} priority</b><span>This plan will stand out across your day.</span></div></div>}{error && <div className="form-error" role="alert">{error}</div>}<div className="composer-mode"><button type="button" className="advanced-toggle" onClick={() => setAdvanced((current) => !current)}><span>{advanced ? '−' : '+'}</span>{advanced ? 'Hide extra details' : 'Add location, notes, and availability'}</button></div><div className="modal-actions"><button type="button" className="secondary-button" onClick={close}>Cancel</button><button className="gold-button">{plan ? 'Save changes' : 'Add to my day'} <span>→</span></button></div></form></section></div>;
+}
+
+function LegacyPlanModalV2({ close, save, existing }) {
   const [form, setForm] = useState(emptyForm());
   const [advanced, setAdvanced] = useState(false);
   const [error, setError] = useState('');
@@ -625,26 +707,80 @@ function Planner({ username, viewOnly = false, onBack, compareUser = '' }) {
   const [selectedDate, setSelectedDate] = useState(today());
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [modal, setModal] = useState(false);
+  const [editingPlan, setEditingPlan] = useState(null);
+  const [radarOpen, setRadarOpen] = useState(false);
   const [filter, setFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [toast, setToast] = useState('');
   useEffect(() => { fetch(api(`/api/plans?username=${encodeURIComponent(username)}`)).then((r) => r.ok ? r.json() : []).then(setPlans).catch(() => setPlans([])); }, [username]);
   useEffect(() => { if (compareUser) fetch(api(`/api/plans?username=${encodeURIComponent(compareUser)}`)).then((r) => r.ok ? r.json() : []).then(setComparePlans).catch(() => setComparePlans([])); }, [compareUser]);
-  useEffect(() => { document.querySelectorAll('.agenda-card').forEach((card) => { const plan = plans.find((item) => item.title === card.querySelector('h3')?.textContent); if (plan) card.dataset.priority = plan.priority || 'None'; }); }, [plans, selectedDate, filter, search]);
   const dayPlans = useMemo(() => plans.filter((p) => p.date === selectedDate && (filter === 'All' || p.category === filter) && p.title.toLowerCase().includes(search.toLowerCase())).sort((a,b) => a.startTime.localeCompare(b.startTime)), [plans, selectedDate, filter, search]);
   const fullDayPlans = plans.filter((p) => p.date === selectedDate).sort((a,b) => a.startTime.localeCompare(b.startTime));
   const compareDayPlans = comparePlans.filter((p) => p.date === selectedDate).sort((a,b) => a.startTime.localeCompare(b.startTime));
   const completed = fullDayPlans.filter((p) => p.completed).length;
   const focused = fullDayPlans.reduce((sum,p) => sum + (mins(p.endTime)-mins(p.startTime)), 0);
   const notify = (message) => { setToast(message); setTimeout(() => setToast(''), 2400); };
+  const closeComposer = () => { setModal(false); setEditingPlan(null); };
   const add = async (form) => {
     const optimistic = { ...form, username, id: crypto.randomUUID(), completed: false };
-    setPlans((p) => [...p, optimistic]); setModal(false); setSelectedDate(form.date); notify('Plan added to your day');
-    try { const r = await fetch(api('/api/plans'), { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ ...form, username }) }); if (r.ok) { const saved = await r.json(); setPlans((p) => p.map((x) => x.id === optimistic.id ? saved : x)); } } catch {}
+    setPlans((current) => [...current, optimistic]); setSelectedDate(form.date); closeComposer();
+    try {
+      const response = await fetch(api('/api/plans'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      if (!response.ok) throw new Error('save failed');
+      const saved = await response.json();
+      setPlans((current) => current.map((item) => item.id === optimistic.id ? saved : item));
+      notify('Plan added to your day');
+    } catch {
+      setPlans((current) => current.filter((item) => item.id !== optimistic.id));
+      notify('That plan was not saved. Please try again.');
+    }
   };
-  const toggle = async (plan) => { setPlans((ps) => ps.map((p) => p.id === plan.id ? { ...p, completed: !p.completed } : p)); await fetch(api(`/api/plans/${plan.id}`), { method:'PATCH', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ completed: !plan.completed }) }).catch(()=>{}); };
-  const remove = async (id) => { setPlans((ps) => ps.filter((p) => p.id !== id)); notify('Plan removed'); await fetch(api(`/api/plans/${id}`), { method:'DELETE' }).catch(()=>{}); };
-  const copyShare = async () => { const url = `${window.location.origin}${window.location.pathname}?view=${encodeURIComponent(username)}`; await navigator.clipboard.writeText(url); notify('Friend link copied'); };
+  const saveEdit = async (form) => {
+    const original = editingPlan;
+    if (!original) return add(form);
+    const optimistic = { ...original, ...form };
+    setPlans((current) => current.map((item) => item.id === original.id ? optimistic : item)); closeComposer();
+    try {
+      const response = await fetch(api(`/api/plans/${original.id}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
+      if (!response.ok) throw new Error('update failed');
+      const saved = await response.json();
+      setPlans((current) => current.map((item) => item.id === original.id ? saved : item));
+      notify('Plan updated');
+    } catch {
+      setPlans((current) => current.map((item) => item.id === original.id ? original : item));
+      notify('Changes were not saved. Please try again.');
+    }
+  };
+  const toggle = async (plan) => {
+    const optimistic = { ...plan, completed: !plan.completed };
+    setPlans((current) => current.map((item) => item.id === plan.id ? optimistic : item));
+    try {
+      const response = await fetch(api(`/api/plans/${plan.id}`), { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ completed: optimistic.completed }) });
+      if (!response.ok) throw new Error('toggle failed');
+      const saved = await response.json();
+      setPlans((current) => current.map((item) => item.id === plan.id ? saved : item));
+    } catch {
+      setPlans((current) => current.map((item) => item.id === plan.id ? plan : item));
+      notify('Progress was not saved. Please try again.');
+    }
+  };
+  const remove = async (plan) => {
+    if (!(await chronosConfirm({ title: `Remove ${plan.title}?`, message: 'This removes the plan from your schedule.', confirmLabel: 'Remove plan' }))) return;
+    setPlans((current) => current.filter((item) => item.id !== plan.id));
+    try {
+      const response = await fetch(api(`/api/plans/${plan.id}`), { method: 'DELETE' });
+      if (!response.ok) throw new Error('remove failed');
+      notify('Plan removed');
+    } catch {
+      setPlans((current) => [...current, plan]);
+      notify('That plan could not be removed. Please try again.');
+    }
+  };
+  const duplicate = async (plan) => {
+    const { id, username: owner, completed, ...copy } = plan;
+    await add({ ...copy, title: `${plan.title} (copy)`, date: shiftDate(plan.date, 1) });
+  };
+  const copyShare = async () => { const url = `${window.location.origin}${window.location.pathname}?view=${encodeURIComponent(username)}`; await navigator.clipboard.writeText(url); notify('Friend link copied — confirmed friends can view it after signing in.'); };
   const loadComparison = async (event) => {
     event.preventDefault(); const name = compareInput.trim(); if (!name) return;
     try { const existsResponse = await fetch(api(`/api/accounts/${encodeURIComponent(name)}/exists`)); const found = existsResponse.ok && (await existsResponse.json()).exists; if (!found) { setComparePlans([]); setCompareName(''); return notify(`No Chronos account named ${name}`); } const r = await fetch(api(`/api/plans?username=${encodeURIComponent(name)}`)); setComparePlans(r.ok ? await r.json() : []); setCompareName(name); setCompareInput(''); notify(`${name} added to the Orbit`); } catch { notify('Could not load that schedule'); }
@@ -674,12 +810,12 @@ function Planner({ username, viewOnly = false, onBack, compareUser = '' }) {
     <section className="orbit-console">
       <div className="orbit-console-head"><div><span className="orbit-kicker">CHRONOS ORBIT / 24H</span><h2>Every hour. One glance.</h2></div>{!viewOnly && <form className="compare-form" onSubmit={loadComparison}><input aria-label="Compare friend" value={compareInput} onChange={(e)=>setCompareInput(e.target.value)} placeholder="Friend's Chronos name"/><button>Compare orbit <span>+</span></button></form>}{compareName && <div className="shared-window"><div><span>BEST SHARED NIGHT WINDOW</span><b>{sharedWindow} <small>MYT</small></b></div><button className="remove-orbit" onClick={removeComparison} aria-label={`Remove ${compareName}'s Orbit`}>{viewOnly ? 'Hide my Orbit' : 'Remove Orbit'} <i>×</i></button></div>}</div>
       <div className="orbit-ruler"><span/><div>{Array.from({length:9},(_,i)=><b key={i}>{String(i*3).padStart(2,'0')}</b>)}</div></div>
-      <div className="orbit-lanes"><div className="night-field"><span>NIGHT / GAMING ZONE</span></div>{orbitRows.map((row,rowIndex)=>{const orbitHeight = `${104 + (row.orbit.depth - 1) * 64}px`; return <div className={`orbit-lane ${row.primary?'primary':''}`} style={{'--orbit-height': orbitHeight}} key={`${row.name}-${rowIndex}`}><header><b>{row.name}</b><span>{row.sub}</span></header><div className="orbit-track" style={{'--orbit-height': orbitHeight}}>{Array.from({length:24},(_,i)=><i className="orbit-hour" key={i}/>)}{nowPosition&&<i className="now-beam" style={{left:nowPosition}}>{rowIndex===0&&<span>NOW</span>}</i>}{row.orbit.plans.map((plan)=>{const status=(plan.status||'Busy').toLowerCase();return <article title={`${plan.title}, ${formatTime(plan.startTime)} to ${formatTime(plan.endTime)}`} className={`orbit-block status-${status} ${plan.isOverlap ? 'is-overlap' : ''}`} style={{left:`${mins(plan.startTime)/1440*100}%`,width:`${Math.max((mins(plan.endTime)-mins(plan.startTime))/1440*100,1.7)}%`,'--orbit-top':`${14 + plan.orbitLane * 64}px`}} key={plan.id}>{plan.isOverlap && <b className="orbit-conflict-badge">OVERLAP</b>}<span>{plan.title}</span><small>{plan.startTime} - {plan.endTime}</small></article>})}{!row.orbit.plans.length&&<em>Open orbit</em>}</div></div>})}</div>
+      <div className="orbit-lanes"><div className="night-field"><span>NIGHT / GAMING ZONE</span></div>{orbitRows.map((row, rowIndex) => { const orbitHeight = `${104 + (row.orbit.depth - 1) * 64}px`; return <div className={`orbit-lane ${row.primary ? 'primary' : ''}`} style={{ '--orbit-height': orbitHeight }} key={`${row.name}-${rowIndex}`}><header><b>{row.name}</b><span>{row.sub}</span></header><div className="orbit-track" style={{ '--orbit-height': orbitHeight }}>{Array.from({ length: 24 }, (_, index) => <i className="orbit-hour" key={index}/>)}{nowPosition && <i className="now-beam" style={{ left: nowPosition }}>{rowIndex === 0 && <span>NOW</span>}</i>}{row.orbit.plans.map((plan) => { const status = (plan.status || 'Busy').toLowerCase(); const editable = !viewOnly && row.primary; return <button type="button" title={`${plan.title}, ${formatTime(plan.startTime)} to ${formatTime(plan.endTime)}`} aria-label={editable ? `Edit ${plan.title}` : `${plan.title}, ${formatTime(plan.startTime)} to ${formatTime(plan.endTime)}`} onClick={() => editable && (setEditingPlan(plan), setModal(true))} className={`orbit-block status-${status} ${plan.isOverlap ? 'is-overlap' : ''}`} style={{ left: `${mins(plan.startTime) / 1440 * 100}%`, width: `${Math.max((mins(plan.endTime) - mins(plan.startTime)) / 1440 * 100, 1.7)}%`, '--orbit-top': `${14 + plan.orbitLane * 64}px` }} key={plan.id}>{plan.isOverlap && <b className="orbit-conflict-badge">OVERLAP</b>}<span>{plan.title}</span><small>{plan.startTime} - {plan.endTime}</small></button>; })}{!row.orbit.plans.length && <em>Open orbit</em>}</div></div>; })}</div>
       {!compareName && !viewOnly && <div className="orbit-invitation"><span>◎</span><p><b>Layer another orbit.</b> Enter a friend's name to reveal when both of you are free tonight.</p></div>}
     </section>
-    <section className="agenda-section"><div className="agenda-heading"><div><span>DAY DETAILS</span><h2>{dayPlans.length ? `${dayPlans.length} moments in focus` : 'An open day'}</h2></div><i>{dateLabel}</i></div><div className="agenda-grid">{dayPlans.map((plan)=>{const status=(plan.status||'Busy').toLowerCase();return <article className={`agenda-card status-${status} ${plan.completed?'done':''}`} key={plan.id}><div className="agenda-time"><b>{plan.startTime}</b><i/><span>{plan.endTime}</span></div><div className="agenda-copy"><span>{plan.status||'Busy'} · {plan.category}</span><h3>{plan.title}</h3><p>{plan.notes||'No additional notes'}</p></div>{!viewOnly&&<div className="agenda-actions"><button onClick={()=>toggle(plan)}>{plan.completed?'Completed':'Mark done'}</button><button aria-label={`Delete ${plan.title}`} onClick={()=>remove(plan.id)}>×</button></div>}</article>})}{!dayPlans.length&&<div className="agenda-empty"><span>{Icons.clock}</span><h3>{viewOnly ? 'Nothing shared for this date.' : 'Your Orbit is clear.'}</h3><p>{viewOnly ? `${username} has no visible blocks here.` : 'A rare luxury: time with no claims on it.'}</p>{!viewOnly&&<button className="secondary-button" onClick={()=>setModal(true)}>Compose a plan</button>}</div>}</div></section>
+    <section className="agenda-section"><div className="agenda-heading"><div><span>DAY DETAILS</span><h2>{dayPlans.length ? `${dayPlans.length} moments in focus` : 'An open day'}</h2></div><i>{dateLabel}</i></div><div className="agenda-grid">{dayPlans.map((plan) => { const status = (plan.status || 'Busy').toLowerCase(); return <article className={`agenda-card status-${status} ${plan.completed ? 'done' : ''}`} data-priority={plan.priority || 'None'} key={plan.id}><div className="agenda-time"><b>{plan.startTime}</b><i/><span>{plan.endTime}</span></div><div className="agenda-copy"><span>{plan.status || 'Busy'} · {plan.category}</span><h3>{plan.title}</h3><p>{plan.notes || 'No additional notes'}</p></div>{!viewOnly && <div className="agenda-actions"><button onClick={() => toggle(plan)}>{plan.completed ? 'Reopen' : 'Complete'}</button><button onClick={() => { setEditingPlan(plan); setModal(true); }}>Edit</button><button onClick={() => duplicate(plan)}>Duplicate</button><button aria-label={`Remove ${plan.title}`} onClick={() => remove(plan)}>Remove</button></div>}</article>; })}{!dayPlans.length && <div className="agenda-empty"><span>{Icons.clock}</span><h3>{viewOnly ? 'Nothing shared for this date.' : 'Your Orbit is clear.'}</h3><p>{viewOnly ? `${username} has no visible blocks here.` : 'A rare luxury: time with no claims on it.'}</p>{!viewOnly && <button className="secondary-button" onClick={() => { setEditingPlan(null); setModal(true); }}>Compose a plan</button>}</div>}</div></section>
     <section className="world-section"><div className="world-heading"><div><span>CHRONOS WORLD / PLACES</span><h2>Where your time will take you.</h2><p>Every plan becomes a point in your world.</p></div><b>{String(worldPlans.length).padStart(2,'0')} <small>LOCATIONS</small></b></div><div className="world-stage"><div className="chrono-globe" aria-hidden="true"><div className="globe-aura"/><div className="globe-sphere"><i className="longitude long-a"/><i className="longitude long-b"/><i className="longitude long-c"/><i className="latitude lat-a"/><i className="latitude lat-b"/><i className="latitude lat-c"/><span className="globe-shine"/></div><div className="globe-ring ring-a"/><div className="globe-ring ring-b"/></div><div className="world-flags">{worldPlans.map((plan,index)=>{const point=globePositions[index];return <article className={`world-flag ${index%2?'card-left':'card-right'}`} style={{left:`${point.x}%`,top:`${point.y}%`,'--flag-delay':`${index*-.7}s`}} key={plan.id}><div className="flag-pin"><i/><span>{index+1}</span></div><div className="world-card"><span>{plan.status||'Busy'} · {plan.category}</span><h3>{plan.title}</h3><p><b>{plan.date}</b><i>{plan.startTime}–{plan.endTime} MYT</i></p><footer>⌖ {plan.location||'Location to be decided'}</footer></div></article>})}</div>{!worldPlans.length&&<div className="world-empty"><span>⌖</span><b>No flags placed yet</b><p>Add a plan with a location to mark your world.</p></div>}</div>{fullDayPlans.length>worldPlans.length&&<p className="world-more">Showing the first {worldPlans.length} of {fullDayPlans.length} plans on the globe.</p>}</section>
-    <LiveUserGlobe username={username}/> {calendarOpen && <FancyCalendar selected={selectedDate} onSelect={setSelectedDate} onClose={() => setCalendarOpen(false)}/>} {modal && !viewOnly && <PlanModal close={()=>setModal(false)} save={add} existing={plans}/>} {toast && <div className="toast"><span>{Icons.check}</span>{toast}</div>}
+    {!viewOnly && <section className="radar-launch"><div><span>OPTIONAL FRIEND RADAR</span><h2>See live signals only when your circle chooses to share.</h2><p>Opening the radar loads the map on demand. Location sharing stays off unless you enable it from Today.</p></div><button className="secondary-button" onClick={() => setRadarOpen((current) => !current)}>{radarOpen ? 'Hide friend radar' : 'Open friend radar'}</button></section>}{radarOpen && !viewOnly && <React.Suspense fallback={<section className="radar-loading">Loading private friend radar…</section>}><FriendRadar username={username}/></React.Suspense>} {calendarOpen && <FancyCalendar selected={selectedDate} onSelect={setSelectedDate} onClose={() => setCalendarOpen(false)}/>} {modal && !viewOnly && <PlanModal close={closeComposer} save={editingPlan ? saveEdit : add} existing={plans} plan={editingPlan}/>} {toast && <div className="toast" role="status"><span>{Icons.check}</span>{toast}</div>}
   </main>;
 }
 
@@ -697,22 +833,22 @@ function AdminPage() {
     try { return JSON.parse(sessionStorage.getItem(ADMIN_SESSION_KEY) || '{}'); }
     catch { return {}; }
   });
-  const [form, setForm] = useState({ username: credentials.username || 'chronosadmin', pin: credentials.pin || '' });
+  const [form, setForm] = useState({ username: '', pin: '' });
   const [dashboard, setDashboard] = useState(null);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
-  const adminHeaders = credentials.username && credentials.pin ? { 'x-admin-username': credentials.username, 'x-admin-pin': credentials.pin } : {};
+  const adminHeaders = credentials.token ? { Authorization: `Bearer ${credentials.token}` } : {};
   const load = () => {
-    if (!credentials.username || !credentials.pin) return;
+    if (!credentials.token) return;
     fetch(api('/api/admin/dashboard'), { headers: adminHeaders }).then((response) => response.ok ? response.json() : Promise.reject(response)).then(setDashboard).catch(() => { setDashboard(null); setError('Admin session expired. Sign in again.'); });
   };
-  useEffect(load, [credentials.username, credentials.pin]);
+  useEffect(load, [credentials.token]);
   const login = async (event) => {
     event.preventDefault(); setError(''); setNotice('');
     const response = await fetch(api('/api/admin/login'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) }).catch(() => null);
     const result = response && await response.json().catch(() => ({}));
     if (!response?.ok) return setError(result?.error || 'Could not sign in as admin.');
-    const next = { username: result.username, pin: form.pin };
+    const next = { username: result.username, token: result.token };
     sessionStorage.setItem(ADMIN_SESSION_KEY, JSON.stringify(next)); setCredentials(next);
   };
   const clearMessages = async (room) => {
@@ -728,7 +864,7 @@ function AdminPage() {
     setNotice(`${room.name} deleted.`); load();
   };
   const lastSeen = (value) => value ? new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Never';
-  if (!credentials.username || !credentials.pin) return <main className="admin-page"><section className="admin-login"><span>CHRONOS ADMIN</span><h1>Control room.</h1><p>Default admin: <b>chronosadmin</b> with PIN <b>102</b>. Override it on Render with ADMIN_USERNAME and ADMIN_PIN.</p><form onSubmit={login}><label>Admin username<input value={form.username} onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))}/></label><label>3-number PIN<input inputMode="numeric" type="password" maxLength="3" value={form.pin} onChange={(event) => setForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 3) }))}/></label>{error && <div className="form-error">{error}</div>}<button className="gold-button">Enter admin</button></form></section></main>;
+  if (!credentials.token) return <main className="admin-page"><section className="admin-login"><span>CHRONOS ADMIN</span><h1>Control room.</h1><p>Admin access is provisioned securely through the environment. Sign in with the credentials supplied to your administrator.</p><form onSubmit={login}><label>Admin username<input autoComplete="username" value={form.username} onChange={(event) => setForm((current) => ({ ...current, username: event.target.value }))}/></label><label>3-number PIN<input inputMode="numeric" type="password" autoComplete="current-password" maxLength="3" value={form.pin} onChange={(event) => setForm((current) => ({ ...current, pin: event.target.value.replace(/\D/g, '').slice(0, 3) }))}/></label>{error && <div className="form-error" role="alert">{error}</div>}<button className="gold-button">Enter admin</button></form></section></main>;
   return <main className="admin-page"><section className="admin-head"><div><span>CHRONOS ADMIN</span><h1>Rooms, users, and chat control.</h1><p>Delete rooms, clear conversations, and audit live account status.</p></div><button className="secondary-button" onClick={() => { sessionStorage.removeItem(ADMIN_SESSION_KEY); setCredentials({}); setDashboard(null); }}>Lock admin</button></section>{notice && <div className="admin-notice">{notice}</div>}{error && <div className="form-error">{error}</div>}<section className="admin-metrics"><article><span>REGISTERED USERS</span><b>{dashboard?.users?.length || 0}</b></article><article><span>PRIVATE ROOMS</span><b>{dashboard?.rooms?.length || 0}</b></article><article><span>RECENT CHATS</span><b>{dashboard?.recentMessages?.length || 0}</b></article></section><section className="admin-grid"><div className="admin-panel"><header><span>USERS</span><b>{dashboard?.users?.filter((user) => user.presence === 'online').length || 0} online</b></header><div className="admin-table">{(dashboard?.users || []).map((user) => <article key={user.id}><div><b>{user.username}</b><span>{user.role === 'admin' ? 'Admin' : 'User'}</span></div><p data-presence={user.presence || 'offline'}>{user.presence || 'offline'}</p><time>{lastSeen(user.lastSeen)}</time></article>)}</div></div><div className="admin-panel"><header><span>ROOMS</span><b>{dashboard?.rooms?.length || 0}</b></header><div className="admin-room-list">{(dashboard?.rooms || []).map((room) => <article key={room.id}><div><h3>{room.name}</h3><p>Host: {room.creator} · {(room.members?.length || 0) + 1} members · {room.messageCount || 0} messages</p></div><footer><button onClick={() => clearMessages(room)}>Clear chat</button><button className="danger" onClick={() => deleteRoomAsAdmin(room)}>Delete</button></footer></article>)}</div></div></section><section className="admin-panel recent-chat"><header><span>RECENT MESSAGES</span><b>{dashboard?.recentMessages?.length || 0}</b></header>{(dashboard?.recentMessages || []).map((message) => <article key={message.id}><b>{message.author}</b><p>{message.text}</p><time>{lastSeen(message.createdAt)}</time></article>)}</section></main>;
 }
 
@@ -740,10 +876,11 @@ function NotificationPrompt({ permission, onEnable, onDismiss }) {
 }
 
 function App() {
-  const [showIntro, setShowIntro] = useState(true);
+  const [showIntro, setShowIntro] = useState(() => localStorage.getItem(INTRO_KEY) !== '1');
   const [inviteReady, setInviteReady] = useState(false);
   const [social, setSocial] = useState(readSocial);
-  const [username, setUsername] = useState(() => localStorage.getItem(SESSION_KEY) || '');
+  const [username, setUsername] = useState(() => getSessionToken() ? localStorage.getItem(SESSION_KEY) || '' : '');
+  const [locationSharing, setLocationSharing] = useState(() => localStorage.getItem(LOCATION_SHARING_KEY) === '1');
   const [notificationPermission, setNotificationPermission] = useState(() => canNotify() ? Notification.permission : 'unsupported');
   const [notificationDismissed, setNotificationDismissed] = useState(() => localStorage.getItem('chronos-notifications-dismissed-v1') === '1');
   const initialRoute = parseChronosRoute();
@@ -751,7 +888,11 @@ function App() {
   const sharedName = params.get('view') || initialRoute.viewing || '';
   const requestedRoomId = params.get('room') || initialRoute.roomId || '';
   const [viewing, setViewing] = useState(sharedName || '');
-  const [page, setPageState] = useState(() => sharedName ? 'friend' : initialRoute.page || (localStorage.getItem(SESSION_KEY) ? 'home' : 'auth'));
+  const [page, setPageState] = useState(() => {
+    if (initialRoute.page === 'invite') return 'invite';
+    const signedIn = Boolean(getSessionToken() && localStorage.getItem(SESSION_KEY));
+    return signedIn ? (sharedName ? 'friend' : initialRoute.page || 'home') : 'auth';
+  });
   const [room, setRoom] = useState(null);
   const currentRoomId = useRef(null);
   const [liveNotice, setLiveNotice] = useState(null);
@@ -771,7 +912,23 @@ function App() {
     if (result === 'granted') sendDeviceNotice({ title: 'Chronos alerts enabled', body: 'Plans, room messages, and friend requests can now reach this device.', tag: 'chronos-enabled' });
   };
   const dismissNotificationPrompt = () => { localStorage.setItem('chronos-notifications-dismissed-v1', '1'); setNotificationDismissed(true); };
+  const toggleLocationSharing = async (enabled) => {
+    setLocationSharing(enabled);
+    localStorage.setItem(LOCATION_SHARING_KEY, enabled ? '1' : '0');
+    if (!enabled && username) {
+      await fetch(api(`/api/live-location/${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => {});
+      setLiveNotice({ type: 'location', copy: 'Live location sharing is off. Your current signal has been removed.' });
+    }
+  };
+  useEffect(() => {
+    const receive = (event) => toggleLocationSharing(Boolean(event.detail));
+    window.addEventListener('chronos-location-sharing', receive);
+    return () => window.removeEventListener('chronos-location-sharing', receive);
+  }, [username]);
   useEffect(() => { currentRoomId.current = page === 'room' ? room?.id || null : null; }, [page, room?.id]);
+  useEffect(() => {
+    if (!username && !['auth', 'invite'].includes(page)) { replaceChronosRoute('auth'); setPageState('auth'); }
+  }, [username, page]);
   useEffect(() => {
     if (!username) return;
     const checkPlans = async () => {
@@ -815,10 +972,10 @@ function App() {
     return () => { clearTimeout(idleTimer.current); events.forEach((name) => window.removeEventListener(name, active)); document.removeEventListener('visibilitychange', active); };
   }, [username]);
   useEffect(() => {
-    if (!username || !navigator.geolocation) return;
-    const watchId = navigator.geolocation.watchPosition((position) => { if (Date.now() - lastLocationPing.current < 8000) return; lastLocationPing.current = Date.now(); fetch(api('/api/live-location'), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy }) }).catch(() => {}); }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+    if (!username || !locationSharing || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition((position) => { if (Date.now() - lastLocationPing.current < 8000) return; lastLocationPing.current = Date.now(); fetch(api('/api/live-location'), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy }) }).catch(() => {}); }, () => {}, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
     return () => navigator.geolocation.clearWatch(watchId);
-  }, [username]);
+  }, [username, locationSharing]);
   useEffect(() => {
     if (!username) return;
     syncSocial(); const timer = window.setInterval(syncSocial, 15000); return () => window.clearInterval(timer);
@@ -855,17 +1012,50 @@ function App() {
     };
     return () => stream.close();
   }, [username]);
+  useEffect(() => {
+    const handlePopState = () => {
+      const route = parseChronosRoute();
+      const query = new URLSearchParams(window.location.search);
+      const shared = query.get('view') || route.viewing || '';
+      if (route.roomId) {
+        const target = social.rooms.find((item) => item.id === route.roomId);
+        setRoom(target || null); setViewing(''); setPageState(target ? 'room' : 'lobby');
+        return;
+      }
+      setViewing(shared);
+      setPageState(shared ? 'friend' : route.page || (username ? 'home' : 'auth'));
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [social.rooms, username]);
   useEffect(() => { const sync = (event) => { if (event.key === SOCIAL_KEY) setSocial(readSocial()); }; window.addEventListener('storage', sync); return () => window.removeEventListener('storage', sync); }, []);
   useEffect(() => {
     if (!username || !requestedRoomId || (page === 'room' && room?.id === requestedRoomId)) return;
     const target = social.rooms.find((item) => item.id === requestedRoomId);
     if (target) { setRoom(target); replaceChronosRoute('room', target.id); setPage('room'); }
   }, [username, requestedRoomId, social.rooms, page, room?.id]);
-  const enter = (name) => { localStorage.setItem(SESSION_KEY, name); setUsername(name); setViewing(''); replaceChronosRoute('home'); setPage('home'); };
+  const enter = (name, token) => { if (!token) return; localStorage.setItem(SESSION_KEY, name); localStorage.setItem(SESSION_TOKEN_KEY, token); setUsername(name); setViewing(''); replaceChronosRoute('home'); setPage('home'); };
   const backToMine = () => { setViewing(''); replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); };
-  const logout = () => { const key = accountKey(username); updateSocial((current) => current.accounts[key] ? ({ ...current, accounts: { ...current.accounts, [key]: { ...current.accounts[key], online: false, lastSeen: Date.now() } } }) : current); localStorage.removeItem(SESSION_KEY); setUsername(''); setViewing(''); setRoom(null); replaceChronosRoute('auth'); setPage('auth'); };
+  const logout = () => { const key = accountKey(username); fetch(api('/api/presence'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'offline' }) }).catch(() => {}); fetch(api(`/api/live-location/${encodeURIComponent(username)}`), { method: 'DELETE' }).catch(() => {}); updateSocial((current) => current.accounts[key] ? ({ ...current, accounts: { ...current.accounts, [key]: { ...current.accounts[key], online: false, lastSeen: Date.now() } } }) : current); localStorage.removeItem(SESSION_KEY); localStorage.removeItem(SESSION_TOKEN_KEY); localStorage.removeItem(LOCATION_SHARING_KEY); setLocationSharing(false); setUsername(''); setViewing(''); setRoom(null); replaceChronosRoute('auth'); setPage('auth'); };
   const navigate = (next) => { setViewing(''); pushChronosRoute(next); setPage(next); };
-  return <div className="app-shell">{showIntro && <IntroSequence onDeparting={() => { if (page === 'invite') setInviteReady(true); }} onComplete={() => setShowIntro(false)}/>}<div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>{page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} {page === 'invite' ? <InvitePage ready={inviteReady || !showIntro} onJoin={() => { replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); }}/> : page === 'admin' ? <AdminPage/> : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/> : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/> : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main> : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/> : page === 'planner' && username ? <Planner username={username}/> : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/> : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} {username && !notificationDismissed && <NotificationPrompt permission={notificationPermission} onEnable={enableNotifications} onDismiss={dismissNotificationPrompt}/>} {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} {page !== 'room' && <Footer/>}</div>;
+  return <div className="app-shell">
+    {showIntro && <IntroSequence onDeparting={() => { if (page === 'invite') setInviteReady(true); }} onComplete={() => setShowIntro(false)}/>}
+    <div className="ambient-stage" aria-hidden="true"><i className="aurora aurora-a"/><i className="aurora aurora-b"/><i className="light-beam"/><i className="film-grain"/></div>
+    {page !== 'room' && <Header page={page} setPage={navigate} username={username} logout={logout} isAdmin={isAdmin}/>} 
+    {page === 'invite' ? <InvitePage ready={inviteReady || !showIntro} onJoin={() => { replaceChronosRoute(username ? 'home' : 'auth'); setPage(username ? 'home' : 'auth'); }}/>
+      : page === 'admin' ? <AdminPage/>
+      : page === 'friend' && viewing ? <Planner username={viewing} viewOnly onBack={backToMine} compareUser={username && username.toLowerCase() !== viewing.toLowerCase() ? username : ''}/>
+      : page === 'room' && room && username ? <Room room={room} username={username} onLeave={() => { replaceChronosRoute('lobby'); setPage('lobby'); }}/>
+      : page === 'room' && username ? <main className="room-page"><section className="rooms-empty"><span>LOADING ROOM</span><h3>Opening your private room.</h3></section></main>
+      : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/>
+      : page === 'reader' && username ? <NovelReader/>
+      : page === 'planner' && username ? <Planner username={username}/>
+      : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/>
+      : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} 
+    {username && !notificationDismissed && <NotificationPrompt permission={notificationPermission} onEnable={enableNotifications} onDismiss={dismissNotificationPrompt}/>} 
+    {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} 
+    {page !== 'room' && page !== 'reader' && <Footer/>}
+  </div>;
 }
 
 createRoot(document.getElementById('root')).render(<><App/><ChronosDialogHost/></>);
