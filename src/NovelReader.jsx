@@ -23,6 +23,7 @@ export default function NovelReader() {
   const [theme, setTheme] = useState(saved.theme);
   const [chrome, setChrome] = useState(true);
   const [panel, setPanel] = useState('');
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 900px)').matches);
   const viewportRef = useRef(null);
   const flowRef = useRef(null);
   const gestureRef = useRef({ x: 0, y: 0 });
@@ -45,6 +46,13 @@ export default function NovelReader() {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)');
+    const updateLayout = () => setIsMobile(media.matches);
+    media.addEventListener('change', updateLayout);
+    return () => media.removeEventListener('change', updateLayout);
+  }, []);
+
   const chapter = novel?.chapters?.[chapterIndex];
   const paragraphs = useMemo(() => chapter?.content?.split(/\n\s*\n/).filter(Boolean) || [], [chapter]);
 
@@ -52,6 +60,13 @@ export default function NovelReader() {
     const viewport = viewportRef.current;
     const flow = flowRef.current;
     if (!viewport || !flow || !chapter) return;
+    if (!isMobile) {
+      pendingLastPageRef.current = false;
+      setPageCount(1);
+      setPageIndex(0);
+      viewport.scrollLeft = 0;
+      return;
+    }
     const width = viewport.clientWidth;
     if (!width) return;
     const count = Math.max(1, Math.ceil((flow.scrollWidth - 1) / width));
@@ -70,13 +85,18 @@ export default function NovelReader() {
     const observer = new ResizeObserver(() => requestAnimationFrame(measurePages));
     if (viewportRef.current) observer.observe(viewportRef.current);
     return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-  }, [chapter, fontSize]);
+  }, [chapter, fontSize, isMobile]);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport && !isMobile) viewport.scrollTo({ top: 0, left: 0 });
+  }, [chapterIndex, isMobile]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
-    if (viewport) viewport.scrollTo({ left: pageIndex * viewport.clientWidth, behavior: 'smooth' });
+    if (viewport && isMobile) viewport.scrollTo({ left: pageIndex * viewport.clientWidth, behavior: 'smooth' });
     localStorage.setItem(READER_KEY, JSON.stringify({ chapter: chapterIndex, page: pageIndex, fontSize, theme }));
-  }, [chapterIndex, pageIndex, fontSize, theme]);
+  }, [chapterIndex, pageIndex, fontSize, theme, isMobile]);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -110,7 +130,7 @@ export default function NovelReader() {
   const previousChapter = () => openChapter(chapterIndex - 1);
 
   const handlePageClick = (event) => {
-    if (suppressClickRef.current || panel) return;
+    if (!isMobile || suppressClickRef.current || panel) return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const position = (event.clientX - bounds.left) / bounds.width;
     if (position < .38) previousPage();
@@ -124,6 +144,7 @@ export default function NovelReader() {
   };
 
   const finishGesture = (event) => {
+    if (!isMobile) return;
     const dx = event.clientX - gestureRef.current.x;
     const dy = event.clientY - gestureRef.current.y;
     if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.25) return;
@@ -136,9 +157,9 @@ export default function NovelReader() {
   if (loadError) return <main className="novel-reader-state"><b>LIBRARY OFFLINE</b><h1>We could not open the book.</h1><p>{loadError}</p></main>;
   if (!novel || !chapter) return <main className="novel-reader-state"><div className="reader-loader"/><b>OPENING LIBRARY</b><p>Preparing your saved page…</p></main>;
 
-  const overallProgress = Math.round(((chapterIndex + (pageIndex + 1) / pageCount) / novel.chapters.length) * 100);
+  const overallProgress = Math.round(((chapterIndex + (isMobile ? (pageIndex + 1) / pageCount : 1)) / novel.chapters.length) * 100);
 
-  return <main className="novel-reader" data-reader-theme={theme} style={{ '--reader-font-size': `${fontSize}px` }}>
+  return <main className="novel-reader" data-reader-theme={theme} data-reader-layout={isMobile ? 'paged' : 'scroll'} style={{ '--reader-font-size': `${fontSize}px` }}>
     <div className={`reader-chrome reader-chrome-top ${chrome ? '' : 'is-hidden'}`}>
       <button onClick={() => setPanel('contents')} aria-label="Open table of contents"><span>☰</span><small>Contents</small></button>
       <div><small>{novel.volume}</small><h1>第 {chapter.number} 章　{chapter.title}</h1></div>
@@ -150,20 +171,20 @@ export default function NovelReader() {
       onClick={handlePageClick}
       onPointerDown={startGesture}
       onPointerUp={finishGesture}
-      aria-label={`Reading ${chapter.title}, page ${Math.min(pageIndex + 1, pageCount)} of ${pageCount}`}
+      aria-label={isMobile ? `Reading ${chapter.title}, page ${Math.min(pageIndex + 1, pageCount)} of ${pageCount}` : `Reading chapter ${chapter.number}, ${chapter.title}`}
     >
       <div className="reader-page-viewport" ref={viewportRef}>
         <article className="reader-flow" ref={flowRef}>
           {paragraphs.map((paragraph, index) => <p key={`${chapter.number}-${index}`}>{paragraph}</p>)}
         </article>
       </div>
-      <div className="reader-tap-hint" aria-hidden="true"><i>‹</i><span>Tap pages · Swipe chapters</span><i>›</i></div>
+      {isMobile && <div className="reader-tap-hint" aria-hidden="true"><i>‹</i><span>Tap pages · Swipe chapters</span><i>›</i></div>}
     </section>
 
     <div className={`reader-chrome reader-chrome-bottom ${chrome ? '' : 'is-hidden'}`}>
       <span>{overallProgress}%</span>
       <div><i style={{ width: `${overallProgress}%` }}/></div>
-      <span>{Math.min(pageIndex + 1, pageCount)} / {pageCount}</span>
+      <span>{isMobile ? `${Math.min(pageIndex + 1, pageCount)} / ${pageCount}` : `Chapter ${chapter.number} / ${novel.chapters.length}`}</span>
     </div>
 
     {panel && <div className="reader-panel-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPanel(''); }}>
@@ -174,7 +195,7 @@ export default function NovelReader() {
         </div> : <div className="reader-settings">
           <label><span>Text size</span><output>{fontSize}px</output><input type="range" min="16" max="30" step="1" value={fontSize} onChange={(event) => setFontSize(Number(event.target.value))}/></label>
           <div><span>Reading theme</span><div className="reader-theme-options">{themes.map((item) => <button className={theme === item.id ? 'active' : ''} data-theme-preview={item.id} key={item.id} onClick={() => setTheme(item.id)}><i/> {item.label}</button>)}</div></div>
-          <p><b>Tap</b> the left or right side to turn a page. <b>Swipe</b> horizontally to move between chapters. Your place is saved automatically.</p>
+          <p>{isMobile ? <><b>Tap</b> the left or right side to turn a page. <b>Swipe</b> horizontally to move between chapters. Vertical scrolling is disabled.</> : <><b>Scroll</b> to read the complete chapter on one continuous page. Use the arrow keys or contents panel to change chapters.</>} Your place is saved automatically.</p>
         </div>}
       </section>
     </div>}
