@@ -1,9 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 const TRAINER_URL = '/pl900-trainer/index.html';
 
 export default function PL900Trainer() {
   const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    document.body.classList.add('pl900-active');
+    return () => document.body.classList.remove('pl900-active');
+  }, []);
 
   return <main className="pl900-page">
     <header className="pl900-page-head">

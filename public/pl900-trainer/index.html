@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#07141f">
   <title>PL-900 Quiz Trainer</title>
-  <link rel="stylesheet" href="styles.css?v=20260716-chronos">
+  <link rel="stylesheet" href="styles.css?v=20260716-mobile-focus">
 </head>
 <body>
   <div class="app-shell">
@@ -39,7 +39,12 @@
           <button class="review-button" id="reviewBtn" aria-label="Mark for review">☆ <span>Review</span></button>
         </div>
 
-        <article class="question-card">
+        <div class="mobile-pane-switch" id="mobilePaneSwitch" aria-label="Question workspace">
+          <button class="active" id="mobileQuestionPaneBtn"><span>01</span><strong>Question</strong><small>View and zoom</small></button>
+          <button id="mobileAnswerPaneBtn"><span>02</span><strong>Answer area</strong><small>Choose your response</small></button>
+        </div>
+
+        <article class="question-card" id="questionCard" data-mobile-pane="question">
           <section class="question-pane" aria-label="Question and solution viewer">
             <div class="viewer-toolbar">
               <div class="viewer-tabs">
@@ -49,6 +54,9 @@
               <div class="viewer-tools" aria-label="Question image size">
                 <button id="fitPageBtn" title="Fit the full image in the viewer">Fit page</button>
                 <button class="active" id="fitWidthBtn" title="Make the question image as wide as possible">Fit width</button>
+                <button id="zoomOutBtn" title="Zoom out" aria-label="Zoom image out">−</button>
+                <output id="zoomLabel" aria-live="polite">100%</output>
+                <button id="zoomInBtn" title="Zoom in" aria-label="Zoom image in">+</button>
               </div>
             </div>
             <div class="viewer-canvas fit-width" id="questionViewer">
@@ -74,6 +82,6 @@
   <script src="questions.js?v=20260714-full-prompts-q57"></script>
   <script src="interactions.js?v=20260714-dragdrop-q57"></script>
   <script src="question-audit.js?v=20260714-dragdrop-q57"></script>
-  <script src="app.js?v=20260714-admin-context"></script>
+  <script src="app.js?v=20260716-mobile-focus"></script>
 </body>
 </html>

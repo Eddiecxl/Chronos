@@ -67,6 +67,8 @@
     progressText: $("progressText"), progressBar: $("progressBar"), position: $("positionLabel"), title: $("questionTitle"),
     prompts: $("promptImages"), interaction: $("interaction"), answerPanel: $("answerPanel"), answers: $("answerImages"),
     viewer: $("questionViewer"), questionView: $("questionViewBtn"), answerView: $("answerViewBtn"), fitPage: $("fitPageBtn"), fitWidth: $("fitWidthBtn"),
+    zoomOut: $("zoomOutBtn"), zoomIn: $("zoomInBtn"), zoomLabel: $("zoomLabel"),
+    questionCard: $("questionCard"), mobilePaneSwitch: $("mobilePaneSwitch"), mobileQuestionPane: $("mobileQuestionPaneBtn"), mobileAnswerPane: $("mobileAnswerPaneBtn"),
     answerSummary: $("answerSummary"), review: $("reviewBtn"), prev: $("prevBtn"), next: $("nextBtn"), nav: $("navPosition"),
     surprise: $("surpriseBtn"), reset: $("resetBtn"), sidebar: $("sidebar"), menu: $("menuBtn"), scrim: $("scrim"), admin: $("adminConfigLink")
   };
@@ -76,6 +78,8 @@
   let selected = new Set();
   let filter = "all";
   let query = "";
+  const defaultViewerZoom = matchMedia("(max-width: 560px)").matches ? 1.25 : 1;
+  let viewerZoom = defaultViewerZoom;
 
   function load() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } }
   function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); }
@@ -120,6 +124,7 @@
     els.answerSummary.textContent = summary || (q.answer ? `Correct answer: ${q.answer.split("").join(", ")}` : "Source answer");
     imageStack(els.answers, q.answerImages, `Answer for question ${q.number}`);
     els.answerView.hidden = false;
+    setMobilePane("question");
     showViewer("answer");
   }
   function showViewer(mode) {
@@ -139,12 +144,35 @@
   }
   function setViewerFit(mode) {
     const page = mode === "page";
+    if (!page) setViewerZoom(1);
     els.viewer.classList.toggle("fit-page", page);
     els.viewer.classList.toggle("fit-width", !page);
     els.fitPage.classList.toggle("active", page);
     els.fitWidth.classList.toggle("active", !page);
     els.viewer.scrollTop = 0;
     els.viewer.scrollLeft = 0;
+  }
+  function setViewerZoom(value) {
+    viewerZoom = Math.max(.75, Math.min(2.5, Math.round(value * 4) / 4));
+    els.viewer.style.setProperty("--viewer-zoom", viewerZoom);
+    els.zoomLabel.textContent = `${Math.round(viewerZoom * 100)}%`;
+    els.zoomOut.disabled = viewerZoom <= .75;
+    els.zoomIn.disabled = viewerZoom >= 2.5;
+    if (viewerZoom !== 1) {
+      els.viewer.classList.remove("fit-page");
+      els.viewer.classList.add("fit-width");
+      els.fitPage.classList.remove("active");
+      els.fitWidth.classList.add("active");
+    }
+  }
+  function setMobilePane(mode) {
+    const answer = mode === "answer";
+    els.questionCard.dataset.mobilePane = answer ? "answer" : "question";
+    els.mobileQuestionPane.classList.toggle("active", !answer);
+    els.mobileAnswerPane.classList.toggle("active", answer);
+    els.mobileQuestionPane.setAttribute("aria-pressed", String(!answer));
+    els.mobileAnswerPane.setAttribute("aria-pressed", String(answer));
+    (answer ? els.interaction : els.viewer).scrollTop = 0;
   }
   function questionKind(q) {
     if (q.acceptedAnswers?.length) return "admintext";
@@ -276,8 +304,12 @@
     const items = dragItems(q);
     const p = document.createElement("p"); p.className = "instruction mode-instruction";
     p.innerHTML = "<strong>Drag-and-drop mode.</strong> Drag reusable answer cards onto the matching boxes or sequence positions in the image. Drag a placed card again to move it.";
-    const stageParts = makeStage();
-    if (stageParts) stageParts.overlay.classList.add("drag-overlay");
+    const workspace = createExamWorkspace("SELECT & PLACE", "Interactive question board");
+    const stage = document.createElement("div"); stage.className = "interactive-stage graded-stage";
+    const stageImage = new Image(); stageImage.src = q.promptImages[0]; stageImage.alt = `Interactive board for question ${q.number}`;
+    const stageOverlay = document.createElement("div"); stageOverlay.className = "interaction-overlay drag-overlay";
+    stage.append(stageImage, stageOverlay); workspace.appendChild(stage);
+    const stageParts = { stage, overlay: stageOverlay, img: stageImage };
     r.placements = Array.isArray(r.placements) ? r.placements : [];
     const palette = document.createElement("div"); palette.className = "drag-palette";
     const row = document.createElement("div"); row.className = "action-row wrap-actions";
@@ -323,7 +355,7 @@
     undo.onclick = () => { r.placements.pop(); persist(); redraw(); };
     clear.onclick = () => { r.placements = []; persist(); redraw(); };
     submit.onclick = () => { r.revealed = true; persist(); reveal(q, "Exact drag-and-drop answer"); selfAssessment(q, r, row); };
-    row.append(count, undo, clear, submit); els.interaction.append(p, palette, row); redraw();
+    row.append(count, undo, clear, submit); els.interaction.append(p, palette, workspace, row); redraw();
     if (r.revealed || completed(r)) reveal(q, "Exact drag-and-drop answer");
   }
   function systemGrade(q, r, ok, row, label) {
@@ -444,7 +476,7 @@
       const card = document.createElement("button"); card.className = "drag-card"; card.innerHTML = `<span>⠿</span>${label}`;
       card.dataset.label = label;
       card.onclick = () => { selectedCard = selectedCard === label ? null : label; updateSelectedCard(); };
-      card.onpointerdown = event => beginDrag(label, null, event); palette.appendChild(card);
+      card.onpointerdown = event => { if (event.pointerType === "mouse") beginDrag(label, null, event); }; palette.appendChild(card);
     });
     const redraw = () => {
       slots.innerHTML = "";
@@ -457,7 +489,7 @@
           persist(); redraw();
         };
         if (answer) {
-          slot.onpointerdown = event => beginDrag(answer, index, event);
+          slot.onpointerdown = event => { if (event.pointerType === "mouse") beginDrag(answer, index, event); };
           slot.ondblclick = () => { r.dragAnswers[index] = null; persist(); redraw(); };
         }
         slots.appendChild(slot);
@@ -554,6 +586,8 @@
   function render() {
     const q = questions[current]; if (!q) return;
     const r = record(q);
+    setMobilePane("question");
+    setViewerZoom(defaultViewerZoom);
     resetViewer();
     els.position.textContent = `QUESTION ${current + 1} OF ${questions.length}`;
     els.title.textContent = `Question ${q.number}`;
@@ -586,6 +620,10 @@
   els.answerView.onclick = () => showViewer("answer");
   els.fitPage.onclick = () => setViewerFit("page");
   els.fitWidth.onclick = () => setViewerFit("width");
+  els.zoomOut.onclick = () => setViewerZoom(viewerZoom - .25);
+  els.zoomIn.onclick = () => setViewerZoom(viewerZoom + .25);
+  els.mobileQuestionPane.onclick = () => setMobilePane("question");
+  els.mobileAnswerPane.onclick = () => setMobilePane("answer");
   document.addEventListener("keydown", e => { if (e.target.matches("input, textarea, select, button")) return; if (e.key === "ArrowRight") move(1); if (e.key === "ArrowLeft") move(-1); });
   render();
 })();
