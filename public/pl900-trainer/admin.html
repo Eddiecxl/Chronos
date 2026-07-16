@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en" class="admin-page">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#07141f">
+  <title>PL-900 Admin Configuration</title><link rel="stylesheet" href="styles.css?v=20260716-chronos"><link rel="stylesheet" href="admin.css?v=20260716-chronos">
+</head>
+<body class="admin-body">
+  <div class="admin-shell">
+    <aside class="admin-sidebar">
+      <div class="brand"><span class="brand-mark">PL</span><div><strong>Admin Studio</strong><small>PL-900 trainer</small></div></div>
+      <a class="back-link" href="index.html" id="backToTrainerLink">← Return to trainer</a>
+      <label class="search"><span>⌕</span><input id="adminSearch" type="search" placeholder="Find question…"></label>
+      <div class="admin-count"><strong id="overrideCount">0</strong><span>configured questions</span></div>
+      <button class="create-question" id="addQuestionBtn">+ Add new question</button>
+      <div class="admin-question-list" id="adminQuestionList"></div>
+      <div class="admin-file-actions"><button class="ghost" id="importBtn">Import JSON</button><button class="ghost" id="exportBtn">Export JSON</button><input id="importFile" type="file" accept="application/json" hidden></div>
+    </aside>
+    <main class="admin-main">
+      <header class="admin-topbar"><div><span class="admin-kicker">CONFIGURATION STUDIO</span><h1>Question manager</h1></div><div class="save-state" id="saveState"><i></i><span>All changes saved</span></div></header>
+      <section class="admin-content">
+        <div class="editor-heading">
+          <div><span id="typeBadge" class="type-badge">QUESTION</span><h2 id="editorTitle">Question 1</h2></div>
+          <div class="editor-heading-actions"><button class="ghost" id="duplicateQuestionBtn">Duplicate</button><button class="danger-button" id="deleteQuestionBtn">Delete</button><button class="ghost" id="resetQuestionBtn">Reset</button><a class="preview-button" href="index.html" id="previewBtn">Preview ↗</a></div>
+        </div>
+        <div class="admin-grid">
+          <section class="admin-card editor-card">
+            <div class="card-title"><span>01</span><div><strong>Question content</strong><small>Change existing questions or author new ones.</small></div></div>
+            <div class="two-fields"><label class="field"><span>Question number</span><input id="questionNumber" type="number" min="1" step="1"></label><label class="field"><span>Answer type</span><select id="questionType"><option value="choice">Multiple choice</option><option value="hotspot">Radio buttons / dropdowns</option><option value="dragdrop">Drag and drop</option><option value="text">Written answer</option></select></label></div>
+            <label class="field"><span>Question text</span><textarea id="customQuestion" rows="6" placeholder="Enter or override the question text."></textarea></label>
+            <details class="source-transcript"><summary>View original OCR transcript</summary><p id="sourceTranscript"></p></details>
+          </section>
+          <section class="admin-card editor-card media-card">
+            <div class="card-title"><span>02</span><div><strong>Question and answer screenshots</strong><small>Upload, paste, or capture images. Stored in IndexedDB.</small></div></div>
+            <div class="media-grid">
+              <div class="media-editor"><strong>Question image</strong><small>Use a clean, unanswered screenshot.</small><div class="media-preview" id="questionImagePreview"><span>No custom image</span></div><input id="questionImageFile" type="file" accept="image/*" capture="environment" hidden><div class="media-actions"><button class="mini-action" id="chooseQuestionImageBtn">Upload / Camera</button><button class="mini-action" id="clearQuestionImageBtn">Clear</button></div></div>
+              <div class="media-editor"><strong>Answer image</strong><small>Use the solved answer area.</small><div class="media-preview" id="answerImagePreview"><span>No custom image</span></div><input id="answerImageFile" type="file" accept="image/*" capture="environment" hidden><div class="media-actions"><button class="mini-action" id="chooseAnswerImageBtn">Upload / Camera</button><button class="mini-action" id="clearAnswerImageBtn">Clear</button></div></div>
+            </div>
+            <button class="undo-paste-button" id="undoPasteBtn" disabled>↶ Undo last pasted image</button>
+            <p class="paste-help">Paste a screenshot with Ctrl+V anywhere on this page, then choose whether it is a question or answer image.</p>
+          </section>
+          <section class="admin-card editor-card" id="answerEditor">
+            <div class="card-title"><span>03</span><div><strong>Answer configuration</strong><small id="answerHint">Configure how this question is graded.</small></div></div>
+            <div id="choiceEditor" hidden><label class="field"><span>Choice labels — one per line</span><textarea id="choiceOptions" rows="7"></textarea></label><label class="field"><span>Correct letters</span><input id="choiceAnswer" type="text" placeholder="Example: AC"></label></div>
+            <div id="dragEditor" hidden><label class="field"><span>Draggable cards — one per line</span><textarea id="dragOptions" rows="8"></textarea></label><label class="field"><span>Correct slot order — one per line</span><textarea id="dragCorrect" rows="8"></textarea></label></div>
+            <div id="hotspotEditor" hidden>
+              <label class="field"><span>Learner control style</span><select id="controlStyle"><option value="radio">Circle buttons (single choice)</option><option value="dropdown">Dropdown menus</option></select></label>
+              <label class="field"><span>Answer rows — one per line</span><textarea id="answerControls" rows="9" placeholder="Statement 1 | Yes, No | Yes&#10;Product choice | Canvas app, Model-driven app, Power Pages | Canvas app"></textarea></label>
+              <p class="field-help">Format: row label | comma-separated choices | correct choice. These become real accessible controls in the trainer.</p>
+              <details><summary>Optional image-coordinate grading</summary><label class="range-field"><span>Click tolerance</span><input id="targetTolerance" type="range" min="2" max="12" value="6"><output id="targetToleranceValue">6%</output></label><div class="target-board" id="targetBoard"><img id="targetImage" alt="Optional image-coordinate grading board"><div id="targetOverlay"></div></div><div class="target-summary"><span id="targetCount">0 targets</span><button class="mini-action" id="clearTargetsBtn">Clear targets</button></div></details>
+            </div>
+            <div id="textEditor" hidden><label class="field"><span>Accepted text answers — one per line</span><textarea id="acceptedAnswers" rows="7" placeholder="Enter every accepted answer variation."></textarea></label></div>
+            <div class="answer-save-panel">
+            <div class="card-title compact"><span>04</span><div><strong>Save and backup</strong><small>Save this answer configuration, then return to the same trainer question.</small></div></div>
+            <div class="publish-summary"><div><strong>Automatic</strong><span>Trainer loads saved changes at startup</span></div><div><strong>Portable</strong><span id="folderStatus">Trainer folder is not connected</span></div></div>
+            <button class="folder-button" id="connectFolderBtn">Connect trainer folder</button>
+            <button class="save-button" id="saveBtn">Save question</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div class="paste-modal" id="pasteModal" hidden>
+    <div class="paste-modal-backdrop" data-paste-cancel></div>
+    <section class="paste-modal-card" role="dialog" aria-modal="true" aria-labelledby="pasteModalTitle">
+      <span class="paste-modal-kicker">SCREENSHOT DETECTED</span>
+      <h2 id="pasteModalTitle">Where should this image be used?</h2>
+      <p>Choose the destination for the pasted screenshot.</p>
+      <div class="paste-modal-preview"><img id="pasteModalPreview" alt="Pasted screenshot preview"></div>
+      <div class="paste-modal-actions">
+        <button class="paste-choice question" id="pasteAsQuestionBtn"><strong>Question</strong><span>Use as the unanswered question image</span></button>
+        <button class="paste-choice answer" id="pasteAsAnswerBtn"><strong>Answer</strong><span>Use as the solved answer image</span></button>
+      </div>
+      <button class="paste-cancel" id="pasteCancelBtn">Cancel</button>
+    </section>
+  </div>
+  <div class="admin-toast" id="adminToast" role="status" aria-live="polite"></div>
+  <script src="questions.js?v=20260714-full-prompts-q57"></script><script src="interactions.js?v=20260714-dragdrop-q57"></script><script src="question-audit.js?v=20260714-dragdrop-q57"></script><script src="admin.js?v=20260714-save-go-back"></script>
+</body></html>

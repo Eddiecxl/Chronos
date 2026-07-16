@@ -7,6 +7,7 @@ Chronos is a Malaysia-time planning app for protecting focus, coordinating avail
 - A focused **Today** command centre with next-up, progress, free-time, and privacy status.
 - Timed quick planning by default, plus all-day plans, editing, completion, duplication, and rescheduling.
 - Responsive bottom navigation so Today, Planner, and Lobby stay reachable on phones.
+- A responsive **PL-900 Exam Trainer** at `/chronos/trainer`, including the saved 350-question configuration and full-screen mode.
 - Friend Radar is loaded only when opened; location sharing is explicitly opt-in and can be stopped from Today.
 - Server-issued signed sessions protect plans, rooms, social data, and live-location actions. A user can only change their own plans and access confirmed friends’ schedules.
 
@@ -56,6 +57,12 @@ Chronos deliberately has no built-in default admin credentials.
 5. Set `CLIENT_ORIGIN` to the exact HTTPS frontend origin, then verify register, plan edit, room membership, and location opt-in in a fresh browser profile.
 
 `render.yaml` and `vercel.json` use pnpm and are prepared for this setup. No repository push or deployment is performed by the app itself.
+
+## PL-900 trainer deployment
+
+The published trainer is stored under `public/pl900-trainer`. Its deployed question overrides and custom screenshots are loaded from `public/pl900-trainer/pl900-trainer-config.json`. Update that file from the standalone trainer before rebuilding whenever you want browser-admin changes to become the new website default.
+
+The trainer is embedded only from the same Chronos origin. The server keeps external framing blocked by sending `X-Frame-Options: SAMEORIGIN`.
 
 ## Privacy notes
 

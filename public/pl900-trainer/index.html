@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#07141f">
+  <title>PL-900 Quiz Trainer</title>
+  <link rel="stylesheet" href="styles.css?v=20260716-chronos">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="brand-mark">PL</span><div><strong>PL-900</strong><small>Quiz trainer</small></div></div>
+      <label class="search"><span>⌕</span><input id="searchInput" type="search" placeholder="Find a question…"></label>
+      <div class="filter-row" id="filters">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="open">Open</button>
+        <button class="chip" data-filter="review">Review</button>
+      </div>
+      <div class="sidebar-summary">
+        <div><strong id="doneCount">0</strong><span>completed</span></div>
+        <div><strong id="scorePercent">—</strong><span>accuracy</span></div>
+      </div>
+      <div class="question-list" id="questionList" aria-label="Questions"></div>
+      <a class="admin-link" href="admin.html" id="adminConfigLink">⚙ Admin configuration</a>
+      <button class="ghost full" id="resetBtn">Reset progress</button>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-button menu" id="menuBtn" aria-label="Open question list">☰ <span>Questions</span></button>
+        <div class="progress-wrap"><div class="progress-label"><span>Your progress</span><strong id="progressText">0 / 350</strong></div><div class="progress-track"><i id="progressBar"></i></div></div>
+        <button class="surprise" id="surpriseBtn">↝ Surprise me</button>
+      </header>
+
+      <section class="content">
+        <div class="question-head">
+          <div><span class="eyebrow" id="positionLabel">QUESTION</span><h1 id="questionTitle">Question 1</h1></div>
+          <button class="review-button" id="reviewBtn" aria-label="Mark for review">☆ <span>Review</span></button>
+        </div>
+
+        <article class="question-card">
+          <section class="question-pane" aria-label="Question and solution viewer">
+            <div class="viewer-toolbar">
+              <div class="viewer-tabs">
+                <button class="viewer-tab active" id="questionViewBtn">Question</button>
+                <button class="viewer-tab" id="answerViewBtn" hidden>Source answer</button>
+              </div>
+              <div class="viewer-tools" aria-label="Question image size">
+                <button id="fitPageBtn" title="Fit the full image in the viewer">Fit page</button>
+                <button class="active" id="fitWidthBtn" title="Make the question image as wide as possible">Fit width</button>
+              </div>
+            </div>
+            <div class="viewer-canvas fit-width" id="questionViewer">
+              <div class="image-stack" id="promptImages"></div>
+              <section class="answer-panel" id="answerPanel" aria-label="Revealed answer" hidden>
+                <div class="answer-heading"><span>ANSWER</span><strong id="answerSummary">Source answer</strong></div>
+                <div class="image-stack answer-images" id="answerImages"></div>
+              </section>
+            </div>
+          </section>
+          <div class="interaction" id="interaction"></div>
+        </article>
+
+        <footer class="nav-row">
+          <button class="nav-button" id="prevBtn">← Previous</button>
+          <span id="navPosition">1 of 350</span>
+          <button class="nav-button primary" id="nextBtn">Next →</button>
+        </footer>
+      </section>
+    </main>
+  </div>
+  <div class="scrim" id="scrim"></div>
+  <script src="questions.js?v=20260714-full-prompts-q57"></script>
+  <script src="interactions.js?v=20260714-dragdrop-q57"></script>
+  <script src="question-audit.js?v=20260714-dragdrop-q57"></script>
+  <script src="app.js?v=20260714-admin-context"></script>
+</body>
+</html>

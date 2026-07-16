@@ -15,7 +15,7 @@ const sessionLifetime = 7 * 24 * 60 * 60 * 1000;
 
 app.disable('x-powered-by');
 app.use((_, res, next) => {
-  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'geolocation=(self), notifications=(self)' });
+  res.set({ 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'SAMEORIGIN', 'Referrer-Policy': 'strict-origin-when-cross-origin', 'Permissions-Policy': 'geolocation=(self), notifications=(self)' });
   next();
 });
 app.use(cors({ origin(origin, callback) { callback(null, !origin || allowedOrigins.includes(origin)); } }));

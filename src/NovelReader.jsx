@@ -170,8 +170,11 @@ export default function NovelReader() {
     if (position < .38) previousPage();
     else if (position > .62) nextPage();
     else {
-      setChrome((current) => !current);
-      window.dispatchEvent(new Event('chronos-reader-nav-show'));
+      setChrome((current) => {
+        const next = !current;
+        window.dispatchEvent(new Event(next ? 'chronos-reader-nav-show' : 'chronos-reader-nav-hide'));
+        return next;
+      });
     }
   };
 
