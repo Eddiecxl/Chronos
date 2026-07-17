@@ -63,7 +63,7 @@
   const STORAGE_KEY = "pl900-trainer-v4-complete-clean";
   const $ = (id) => document.getElementById(id);
   const els = {
-    list: $("questionList"), search: $("searchInput"), filters: $("filters"), done: $("doneCount"), score: $("scorePercent"),
+    list: $("questionList"), search: $("searchInput"), filters: $("filters"), wrongCount: $("wrongCount"), done: $("doneCount"), score: $("scorePercent"),
     progressText: $("progressText"), progressBar: $("progressBar"), position: $("positionLabel"), title: $("questionTitle"),
     prompts: $("promptImages"), interaction: $("interaction"), answerPanel: $("answerPanel"), answers: $("answerImages"),
     viewer: $("questionViewer"), questionView: $("questionViewBtn"), answerView: $("answerViewBtn"), fitPage: $("fitPageBtn"), fitWidth: $("fitWidthBtn"),
@@ -85,10 +85,18 @@
   function persist() { localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); }
   function record(q) { return saved[q.number] || (saved[q.number] = {}); }
   function completed(r) { return r.result === "correct" || r.result === "wrong"; }
+  function prepareRetry(q) {
+    const r = record(q);
+    if (r.result !== "wrong") return;
+    r.retrying = true;
+    r.revealed = false;
+    ["controlAnswers", "hotspots", "placements", "dragAnswers", "textAnswer", "selectedChoice"].forEach(key => delete r[key]);
+    persist();
+  }
   function matching() {
     return questions.filter(q => {
       const r = saved[q.number] || {};
-      const statusOk = filter === "all" || (filter === "open" && !completed(r)) || (filter === "review" && r.review);
+      const statusOk = filter === "all" || (filter === "open" && !completed(r)) || (filter === "wrong" && r.result === "wrong") || (filter === "review" && r.review);
       const queryOk = !query || String(questions.indexOf(q) + 1).includes(query) || String(q.number).includes(query) || q.search.toLowerCase().includes(query);
       return statusOk && queryOk;
     });
@@ -101,13 +109,18 @@
     if (!force && !els.sidebar.classList.contains("open")) return;
     const visible = matching();
     els.list.innerHTML = "";
+    if (!visible.length && filter === "wrong") {
+      const empty = document.createElement("div"); empty.className = "wrong-empty";
+      empty.textContent = "No incorrect questions yet. Wrong answers will appear here for a clean retry.";
+      els.list.appendChild(empty); return;
+    }
     visible.forEach(q => {
       const r = saved[q.number] || {};
       const b = document.createElement("button");
       b.className = `q-jump${q === questions[current] ? " current" : ""}${r.result ? ` ${r.result}` : ""}${r.review ? " review" : ""}`;
       b.textContent = q.number;
       b.title = `Question ${q.number}`;
-      b.onclick = () => { current = questions.indexOf(q); closeMenu(); render(); };
+      b.onclick = () => { current = questions.indexOf(q); if (filter === "wrong") prepareRetry(q); closeMenu(); render(); };
       els.list.appendChild(b);
     });
   }
@@ -115,10 +128,25 @@
     const records = questions.map(q => saved[q.number] || {});
     const done = records.filter(completed).length;
     const correct = records.filter(r => r.result === "correct").length;
+    const wrong = records.filter(r => r.result === "wrong").length;
     els.done.textContent = done;
     els.score.textContent = done ? `${Math.round(correct / done * 100)}%` : "—";
+    els.wrongCount.textContent = wrong;
     els.progressText.textContent = `${done} / ${questions.length}`;
     els.progressBar.style.width = `${done / questions.length * 100}%`;
+  }
+  function renderNavigation() {
+    if (filter === "wrong") {
+      const retryQuestions = matching();
+      const position = retryQuestions.indexOf(questions[current]);
+      els.nav.textContent = retryQuestions.length ? `${Math.max(0, position) + 1} of ${retryQuestions.length} retries` : "No wrong answers";
+      els.prev.disabled = position <= 0;
+      els.next.disabled = position < 0 || position >= retryQuestions.length - 1;
+      return;
+    }
+    els.nav.textContent = `${current + 1} of ${questions.length}`;
+    els.prev.disabled = current === 0;
+    els.next.disabled = current === questions.length - 1;
   }
   function reveal(q, summary) {
     els.answerSummary.textContent = summary || (q.answer ? `Correct answer: ${q.answer.split("").join(", ")}` : "Source answer");
@@ -186,7 +214,7 @@
     const yes = document.createElement("button"); yes.className = "action"; yes.textContent = "I got it right";
     const no = document.createElement("button"); no.className = "action self-wrong"; no.textContent = "Needs another pass";
     const mark = result => {
-      r.result = result; r.revealed = true; persist(); renderStats(); renderList();
+      r.result = result; r.revealed = true; delete r.retrying; persist(); renderStats(); renderList(); renderNavigation();
       const msg = document.createElement("span"); msg.className = `result ${result === "correct" ? "good" : "bad"}`;
       msg.textContent = result === "correct" ? "Locked in." : "Marked for another pass."; row.replaceChildren(msg);
     };
@@ -232,7 +260,7 @@
     clear.onclick = () => { r.hotspots = []; persist(); redraw(); };
     submit.onclick = () => { r.revealed = true; persist(); reveal(q, "Exact hotspot answer"); selfAssessment(q, r, row); };
     row.append(count, undo, clear, submit); els.interaction.append(p, row); redraw();
-    if (r.revealed || completed(r)) reveal(q, "Exact hotspot answer");
+    if (!r.retrying && (r.revealed || completed(r))) reveal(q, "Exact hotspot answer");
   }
   function renderNativeAnswerControls(q, r) {
     const data = interactions[q.number] || {};
@@ -284,7 +312,7 @@
       }
     };
     actions.appendChild(submit); workspace.appendChild(form); els.interaction.append(instruction, workspace, actions); update();
-    if (completed(r)) reveal(q, "Source answer");
+    if (completed(r) && !r.retrying) reveal(q, "Source answer");
   }
 
   function dragItems(q) {
@@ -356,11 +384,12 @@
     clear.onclick = () => { r.placements = []; persist(); redraw(); };
     submit.onclick = () => { r.revealed = true; persist(); reveal(q, "Exact drag-and-drop answer"); selfAssessment(q, r, row); };
     row.append(count, undo, clear, submit); els.interaction.append(p, palette, workspace, row); redraw();
-    if (r.revealed || completed(r)) reveal(q, "Exact drag-and-drop answer");
+    if (!r.retrying && (r.revealed || completed(r))) reveal(q, "Exact drag-and-drop answer");
   }
   function systemGrade(q, r, ok, row, label) {
     r.result = ok ? "correct" : "wrong";
     r.revealed = true;
+    delete r.retrying;
     persist();
     const banner = document.createElement("div");
     banner.className = `grade-banner ${ok ? "correct" : "wrong"}`;
@@ -369,6 +398,7 @@
     reveal(q, label);
     renderStats();
     renderList();
+    renderNavigation();
   }
 
   function createExamWorkspace(label, title) {
@@ -436,7 +466,7 @@
     controls.append(count, undo, clear, submit);
     els.interaction.append(instruction, workspace, controls);
     redraw();
-    if (completed(r)) reveal(q, "Grading key — hotspot");
+    if (completed(r) && !r.retrying) reveal(q, "Grading key — hotspot");
   }
 
   function renderDragDropGraded(q, r) {
@@ -509,7 +539,7 @@
     controls.append(count, undo, clear, submit);
     els.interaction.append(instruction, palette, workspace, controls);
     redraw();
-    if (completed(r)) reveal(q, "Grading key — drag and drop");
+    if (completed(r) && !r.retrying) reveal(q, "Grading key — drag and drop");
   }
 
   function renderAdminTextGraded(q, r) {
@@ -524,7 +554,7 @@
     const normalize = value => String(value).trim().toLowerCase().replace(/\s+/g, " ").replace(/[^a-z0-9 ]/g, "");
     submit.onclick = () => { const ok = q.acceptedAnswers.some(answer => normalize(answer) === normalize(field.value)); systemGrade(q, r, ok, controls, "Admin grading key"); };
     controls.appendChild(submit); els.interaction.append(instruction, workspace, controls);
-    if (completed(r)) reveal(q, "Admin grading key");
+    if (completed(r) && !r.retrying) reveal(q, "Admin grading key");
   }
 
   function renderInteraction(q) {
@@ -557,20 +587,21 @@
           r.selectedChoice = picked; r.revealed = true; persist(); reveal(q, "Source answer"); selfAssessment(q, r, actionRow); return;
         }
         const ok = picked === q.answer.split("").sort().join("");
-        r.result = ok ? "correct" : "wrong"; persist();
+        r.result = ok ? "correct" : "wrong"; delete r.retrying; persist();
         [...choices.children].forEach(b => { b.disabled = true; if (q.answer.includes(b.textContent)) b.classList.add("correct"); else if (selected.has(b.textContent)) b.classList.add("wrong"); });
         submit.remove(); const result = document.createElement("span"); result.className = `result ${ok ? "good" : "bad"}`; result.textContent = ok ? "Correct — nicely done." : `Not quite. The source answer is ${q.answer.split("").join(", ")}.`; actionRow.appendChild(result);
-        reveal(q); renderStats(); renderList();
+        reveal(q); renderStats(); renderList(); renderNavigation();
       };
       els.interaction.append(p, choices, actionRow); actionRow.appendChild(submit);
-      if (completed(r)) reveal(q);
+      if (completed(r) && !r.retrying) reveal(q);
     } else {
       const p = document.createElement("p"); p.className = "instruction"; p.textContent = "Enter your answer before checking the source solution. Your response stays private in this browser.";
       const workspace = createExamWorkspace("YOUR RESPONSE", "Answer area");
       const field = document.createElement("textarea"); field.className = "learner-answer"; field.rows = 4; field.placeholder = "Type your answer here..."; field.value = r.textAnswer || "";
       workspace.appendChild(field);
       const row = document.createElement("div"); row.className = "action-row";
-      const revealBtn = document.createElement("button"); revealBtn.className = "action"; revealBtn.textContent = completed(r) ? "Show source answer" : "Check source answer"; revealBtn.disabled = !field.value.trim() && !completed(r);
+      const previouslyCompleted = completed(r) && !r.retrying;
+      const revealBtn = document.createElement("button"); revealBtn.className = "action"; revealBtn.textContent = previouslyCompleted ? "Show source answer" : "Check source answer"; revealBtn.disabled = !field.value.trim() && !previouslyCompleted;
       field.oninput = () => { r.textAnswer = field.value; persist(); revealBtn.disabled = !field.value.trim(); };
       revealBtn.onclick = () => {
         reveal(q); row.innerHTML = "";
@@ -578,9 +609,9 @@
         const no = document.createElement("button"); no.className = "action self-wrong"; no.textContent = "Needs another pass";
         yes.onclick = () => mark("correct"); no.onclick = () => mark("wrong"); row.append(yes, no);
       };
-      const mark = result => { r.result = result; persist(); renderStats(); renderList(); const msg = document.createElement("span"); msg.className = `result ${result === "correct" ? "good" : "bad"}`; msg.textContent = result === "correct" ? "Locked in." : "Marked for another pass."; row.replaceChildren(msg); };
+      const mark = result => { r.result = result; delete r.retrying; persist(); renderStats(); renderList(); renderNavigation(); const msg = document.createElement("span"); msg.className = `result ${result === "correct" ? "good" : "bad"}`; msg.textContent = result === "correct" ? "Locked in." : "Marked for another pass."; row.replaceChildren(msg); };
       row.appendChild(revealBtn); els.interaction.append(p, workspace, row);
-      if (completed(r)) reveal(q);
+      if (completed(r) && !r.retrying) reveal(q);
     }
   }
   function render() {
@@ -589,7 +620,7 @@
     setMobilePane("question");
     setViewerZoom(defaultViewerZoom);
     resetViewer();
-    els.position.textContent = `QUESTION ${current + 1} OF ${questions.length}`;
+    els.position.textContent = r.retrying ? `RETRY QUESTION ${q.number}` : `QUESTION ${current + 1} OF ${questions.length}`;
     els.title.textContent = `Question ${q.number}`;
     els.admin.href = `admin.html#q${q.number}`;
     if (location.hash !== `#q${q.number}`) history.replaceState(null, "", `#q${q.number}`);
@@ -603,18 +634,38 @@
       els.prompts.prepend(custom);
     }
     renderInteraction(q); renderList(); renderStats();
-    els.nav.textContent = `${current + 1} of ${questions.length}`; els.prev.disabled = current === 0; els.next.disabled = current === questions.length - 1;
+    renderNavigation();
     els.interaction.scrollTop = 0;
     els.viewer.scrollTop = 0;
   }
-  function move(delta) { current = Math.max(0, Math.min(questions.length - 1, current + delta)); render(); }
+  function move(delta) {
+    if (filter === "wrong") {
+      const retryQuestions = matching();
+      if (!retryQuestions.length) return;
+      const position = retryQuestions.indexOf(questions[current]);
+      const nextPosition = Math.max(0, Math.min(retryQuestions.length - 1, (position < 0 ? 0 : position) + delta));
+      current = questions.indexOf(retryQuestions[nextPosition]); prepareRetry(questions[current]); render(); return;
+    }
+    current = Math.max(0, Math.min(questions.length - 1, current + delta)); render();
+  }
   function closeMenu() { els.sidebar.classList.remove("open"); els.scrim.classList.remove("show"); }
   els.prev.onclick = () => move(-1); els.next.onclick = () => move(1);
   els.review.onclick = () => { const r = record(questions[current]); r.review = !r.review; persist(); render(); };
   els.surprise.onclick = () => { const open = questions.map((q, i) => [q, i]).filter(([q]) => !completed(saved[q.number] || {})); const pool = open.length ? open : questions.map((q, i) => [q, i]); current = pool[Math.floor(Math.random() * pool.length)][1]; render(); };
   els.search.oninput = e => { query = e.target.value.trim().toLowerCase(); renderList(true); };
-  els.filters.onclick = e => { const b = e.target.closest("button[data-filter]"); if (!b) return; filter = b.dataset.filter; [...els.filters.children].forEach(x => x.classList.toggle("active", x === b)); renderList(true); };
-  els.reset.onclick = () => { if (confirm("Reset all answers and review marks?")) { saved = {}; persist(); current = 0; render(); } };
+  els.filters.onclick = e => {
+    const b = e.target.closest("button[data-filter]"); if (!b) return;
+    filter = b.dataset.filter; [...els.filters.children].forEach(x => x.classList.toggle("active", x === b));
+    if (filter === "wrong") {
+      const retryQuestions = matching();
+      if (retryQuestions.length) {
+        const q = record(questions[current]).result === "wrong" ? questions[current] : retryQuestions[0];
+        current = questions.indexOf(q); prepareRetry(q); closeMenu(); render(); return;
+      }
+    }
+    renderList(true);
+  };
+  els.reset.onclick = () => { if (confirm("Reset all answers and review marks?")) { saved = {}; filter = "all"; [...els.filters.children].forEach(x => x.classList.toggle("active", x.dataset.filter === "all")); persist(); current = 0; closeMenu(); render(); } };
   els.menu.onclick = () => { renderList(true); els.sidebar.classList.add("open"); els.scrim.classList.add("show"); }; els.scrim.onclick = closeMenu;
   els.questionView.onclick = () => showViewer("question");
   els.answerView.onclick = () => showViewer("answer");

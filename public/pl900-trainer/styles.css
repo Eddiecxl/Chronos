@@ -37,9 +37,12 @@ button { color: inherit; }
 .brand small { margin-top: 2px; color: var(--muted); font-size: 12px; }
 .search { height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: #0c202b; color: var(--muted); }
 .search input { width: 100%; border: 0; outline: 0; background: transparent; color: var(--ink); }
-.filter-row { display: flex; gap: 7px; margin: 11px 0; }
-.chip { padding: 7px 11px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 750; }
+.filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin: 11px 0; }
+.chip { min-width: 0; padding: 7px 8px; border: 1px solid var(--line); border-radius: 99px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 750; }
 .chip.active { border-color: #32736d; background: var(--cyan-dark); color: #b9fff1; }
+.retry-chip span { min-width: 18px; height: 18px; display: inline-grid; place-items: center; margin-left: 4px; padding: 0 4px; border-radius: 99px; background: #3d2526; color: #ffaaa5; font-size: 9px; }
+.retry-chip.active { border-color: #9a5250; background: #321f20; color: #ffd1cd; }
+.retry-chip.active span { background: #ff827c; color: #2a1112; }
 .sidebar-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
 .sidebar-summary div { padding: 9px 11px; border-radius: 9px; background: #0c202b; }
 .sidebar-summary strong, .sidebar-summary span { display: block; }
@@ -52,6 +55,7 @@ button { color: inherit; }
 .q-jump.correct { color: var(--good); }
 .q-jump.wrong { color: var(--bad); }
 .q-jump.review::after { content: ""; display: block; width: 4px; height: 4px; margin: 1px auto 0; border-radius: 50%; background: var(--amber); }
+.wrong-empty { grid-column: 1 / -1; padding: 18px 12px; border: 1px dashed #46535c; border-radius: 9px; color: #93a0a7; font-size: 11px; line-height: 1.5; text-align: center; }
 .admin-link { margin: 6px 0 10px; color: #8fead9; text-decoration: none; font-size: 12px; }
 .ghost { padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; background: transparent; color: var(--muted); cursor: pointer; }
 .full { width: 100%; }
