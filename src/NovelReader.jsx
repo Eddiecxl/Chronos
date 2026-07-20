@@ -33,6 +33,7 @@ export default function NovelReader() {
   const pendingLastPageRef = useRef(false);
   const chapterTimersRef = useRef([]);
   const pageTimerRef = useRef(null);
+  const scrollResetFramesRef = useRef([]);
 
   useEffect(() => {
     let active = true;
@@ -60,10 +61,34 @@ export default function NovelReader() {
   useEffect(() => () => {
     chapterTimersRef.current.forEach(window.clearTimeout);
     window.clearTimeout(pageTimerRef.current);
+    scrollResetFramesRef.current.forEach(window.cancelAnimationFrame);
   }, []);
 
   const chapter = novel?.chapters?.[chapterIndex];
   const paragraphs = useMemo(() => chapter?.content?.split(/\n\s*\n/).filter(Boolean) || [], [chapter]);
+
+  const resetDesktopScroll = () => {
+    const viewport = viewportRef.current;
+    if (!viewport || isMobile) return;
+
+    scrollResetFramesRef.current.forEach(window.cancelAnimationFrame);
+    viewport.style.scrollBehavior = 'auto';
+    viewport.scrollTop = 0;
+    viewport.scrollLeft = 0;
+
+    const firstFrame = window.requestAnimationFrame(() => {
+      viewport.scrollTop = 0;
+      viewport.scrollLeft = 0;
+      const secondFrame = window.requestAnimationFrame(() => {
+        viewport.scrollTop = 0;
+        viewport.scrollLeft = 0;
+        viewport.style.scrollBehavior = '';
+        scrollResetFramesRef.current = [];
+      });
+      scrollResetFramesRef.current = [firstFrame, secondFrame];
+    });
+    scrollResetFramesRef.current = [firstFrame];
+  };
 
   const measurePages = () => {
     const viewport = viewportRef.current;
@@ -97,8 +122,7 @@ export default function NovelReader() {
   }, [chapter, fontSize, isMobile]);
 
   useLayoutEffect(() => {
-    const viewport = viewportRef.current;
-    if (viewport && !isMobile) viewport.scrollTo({ top: 0, left: 0 });
+    resetDesktopScroll();
   }, [chapterIndex, isMobile]);
 
   useEffect(() => {
@@ -121,6 +145,7 @@ export default function NovelReader() {
     if (!novel?.chapters?.[index] || index === chapterIndex || chapterMotion) return;
     const commit = () => {
       pendingLastPageRef.current = atEnd;
+      resetDesktopScroll();
       setChapterIndex(index);
       setPageIndex(0);
       setPanel('');
