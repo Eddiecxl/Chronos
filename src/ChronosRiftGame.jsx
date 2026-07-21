@@ -2,8 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import './game.css';
 
 const STORAGE_KEY = 'chronos-rift-best-v1';
-const WORLD = { width: 2680, height: 720, gravity: 0.72 };
-const PLAYER = { width: 38, height: 58, speed: 5.1, jump: 14.8, dash: 15.5 };
+const WORLD = { width: 2680, height: 720, gravity: 0.76 };
+const PLAYER = { width: 38, height: 58, speed: 5.35, jump: 15.1, dash: 16.2 };
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const intersects = (a, b) => a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 const centerOf = (rect) => ({ x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 });
@@ -42,7 +42,7 @@ const mission = {
 };
 
 const initialRun = () => ({
-  player: { x: mission.spawn.x, y: mission.spawn.y, vx: 0, vy: 0, facing: 1, grounded: false, jumps: 0, dashing: 0, invuln: 0 },
+  player: { x: mission.spawn.x, y: mission.spawn.y, vx: 0, vy: 0, facing: 1, grounded: false, jumps: 0, dashing: 0, invuln: 0, runCycle: 0, tilt: 0, landed: 0 },
   shards: baseShards,
   keyTaken: false,
   doorOpen: false,
@@ -88,8 +88,8 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
   const jumpLatch = useRef(false);
   const dashLatch = useRef(false);
   const [, forceFrame] = useState(0);
-  const [viewWidth, setViewWidth] = useState(1100);
-  const [status, setStatus] = useState('ready');
+  const [viewSize, setViewSize] = useState({ width: 1100, height: 640 });
+  const [status, setStatus] = useState('boot');
   const [best, setBest] = useState(() => Number(localStorage.getItem(STORAGE_KEY) || 0));
   const [camera, setCamera] = useState(0);
 
@@ -102,11 +102,26 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
   })), []);
 
   useEffect(() => {
-    const resize = () => setViewWidth(stageRef.current?.clientWidth || window.innerWidth || 1100);
+    const resize = () => setViewSize({
+      width: stageRef.current?.clientWidth || window.innerWidth || 1100,
+      height: stageRef.current?.clientHeight || Math.max(460, window.innerHeight - 180)
+    });
     resize();
     window.addEventListener('resize', resize);
     return () => window.removeEventListener('resize', resize);
   }, []);
+
+  useEffect(() => {
+    if (status !== 'boot') return undefined;
+    const loadingTimer = window.setTimeout(() => setStatus('loading'), 1700);
+    return () => window.clearTimeout(loadingTimer);
+  }, [status]);
+
+  useEffect(() => {
+    if (status !== 'loading') return undefined;
+    const menuTimer = window.setTimeout(() => setStatus('menu'), 2200);
+    return () => window.clearTimeout(menuTimer);
+  }, [status]);
 
   const reset = () => {
     runRef.current = initialRun();
@@ -124,6 +139,7 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
       last = now;
       const run = runRef.current;
       const p = run.player;
+      const wasGrounded = p.grounded;
       const control = keys.current;
       const slowFactor = run.slowActive && run.slow > 0 ? 0.48 : 1;
       run.time += delta * 16.67;
@@ -135,8 +151,8 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
 
       const move = (control.right ? 1 : 0) - (control.left ? 1 : 0);
       if (move) p.facing = move;
-      p.vx += (move * PLAYER.speed - p.vx) * (p.grounded ? 0.33 : 0.17);
-      if (!move && p.grounded) p.vx *= 0.78;
+      p.vx += (move * PLAYER.speed - p.vx) * (p.grounded ? 0.23 : 0.125);
+      if (!move && p.grounded) p.vx *= 0.84;
       if (control.jump && !jumpLatch.current && p.jumps < 2) {
         p.vy = -PLAYER.jump * (p.jumps ? 0.86 : 1);
         p.grounded = false;
@@ -151,6 +167,9 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
       dashLatch.current = control.dash;
       if (p.dashing > 0) p.dashing -= delta;
       p.vy += WORLD.gravity * delta * slowFactor;
+      p.runCycle += Math.abs(p.vx) * delta * (p.grounded ? 0.105 : 0.035);
+      p.tilt += (clamp(p.vx * 2.15, -12, 12) - p.tilt) * 0.18;
+      p.landed = Math.max(0, p.landed - delta);
 
       p.x += p.vx * delta * slowFactor;
       let playerBox = { x: p.x, y: p.y, w: PLAYER.width, h: PLAYER.height };
@@ -171,10 +190,12 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
         const box = { x: platform.x, y: platform.y, w: platform.w, h: platform.h };
         if (!intersects(playerBox, box)) continue;
         if (p.vy >= 0 && p.y + PLAYER.height - p.vy * delta * slowFactor <= platform.y + 12) {
+          const landingVelocity = p.vy;
           p.y = platform.y - PLAYER.height;
           p.vy = 0;
           p.grounded = true;
           p.jumps = 0;
+          if (!wasGrounded && Math.abs(landingVelocity) > 5) p.landed = 18;
         } else if (p.vy < 0) {
           p.y = platform.y + platform.h;
           p.vy = 0;
@@ -232,19 +253,23 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
         setBest(nextBest);
         setStatus('won');
       }
-      const nextCamera = clamp(p.x - viewWidth * 0.42, 0, WORLD.width - viewWidth);
+      const scale = Math.min(1, Math.max(0.58, viewSize.height / WORLD.height));
+      const visibleWorldWidth = viewSize.width / scale;
+      const nextCamera = clamp(p.x - visibleWorldWidth * 0.42, 0, Math.max(0, WORLD.width - visibleWorldWidth));
       setCamera(nextCamera);
       forceFrame((tick) => tick + 1);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [best, keys, status, viewWidth]);
+  }, [best, keys, status, viewSize.height, viewSize.width]);
 
   const run = runRef.current;
   const player = run.player;
   const elapsed = Math.floor(run.time / 1000);
   const portalNodes = [mission.portalA, mission.portalB];
+  const worldScale = Math.min(1, Math.max(0.58, viewSize.height / WORLD.height));
+  const playerSpeed = Math.min(1, Math.abs(player.vx) / PLAYER.speed);
 
   return <main className="rift-page">
     <section className="rift-hero">
@@ -268,7 +293,7 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
       </div>
 
       <div className="rift-stage">
-        <div className="rift-world" style={{ width: WORLD.width, height: WORLD.height, transform: `translate3d(${-camera}px,0,0)` }}>
+        <div className="rift-world" style={{ width: WORLD.width, height: WORLD.height, transform: `translate3d(${-camera * worldScale}px,0,0) scale(${worldScale})` }}>
           <div className="rift-backdrop">
             <i className="rift-moon"/>
             <i className="rift-planet"/>
@@ -284,8 +309,8 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
           {run.shards.map((shard) => <div className="rift-shard" style={{ left: shard.x, top: shard.y }} key={shard.id}><i/></div>)}
           {!run.keyTaken && <div className="rift-key" style={{ left: mission.key.x, top: mission.key.y }}><i/><b/></div>}
           <div className={`rift-gate ${run.doorOpen ? 'open' : ''}`} style={{ left: mission.gate.x, top: mission.gate.y, width: mission.gate.w, height: mission.gate.h }}><i/><span>EXIT</span></div>
-          <div className={`rift-player ${player.grounded ? 'grounded' : 'airborne'} ${player.dashing > 0 ? 'dashing' : ''} ${player.invuln > 0 ? 'damaged' : ''}`} style={{ left: player.x, top: player.y, width: PLAYER.width, height: PLAYER.height, transform: `scaleX(${player.facing})` }}>
-            <i className="cape"/><i className="head"/><i className="core"/><i className="leg leg-a"/><i className="leg leg-b"/>
+          <div className={`rift-player ${player.grounded ? 'grounded' : 'airborne'} ${player.dashing > 0 ? 'dashing' : ''} ${player.invuln > 0 ? 'damaged' : ''} ${player.landed > 0 ? 'landed' : ''}`} style={{ left: player.x, top: player.y, width: PLAYER.width, height: PLAYER.height, '--facing': player.facing, '--tilt': `${player.tilt}deg`, '--run': player.runCycle, '--speed': playerSpeed }}>
+            <i className="shadow"/><i className="cape"/><i className="arm arm-a"/><i className="arm arm-b"/><i className="head"/><i className="visor"/><i className="core"/><i className="leg leg-a"/><i className="leg leg-b"/><i className="dust"/>
           </div>
         </div>
       </div>
@@ -295,12 +320,30 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
         <p>{run.message}</p>
       </div>
 
-      {status !== 'playing' && <div className="rift-overlay">
-        <div className="rift-orbit-logo"><i/><i/><b>C</b></div>
-        <span>{status === 'ready' ? 'MISSION READY' : status === 'won' ? 'MISSION COMPLETE' : 'TIMELINE BROKEN'}</span>
-        <h2>{status === 'ready' ? 'Enter the first rift.' : status === 'won' ? 'Rift sealed beautifully.' : 'Rewind the run.'}</h2>
-        <p>{status === 'ready' ? 'Use movement, slow-time, and portals like a strategy puzzle — not just speed.' : status === 'won' ? `Final score ${run.score.toLocaleString()}. Best ${best.toLocaleString()}.` : 'The rift punished your route. Try a slower, cleaner line.'}</p>
-        <button className="gold-button" onClick={reset}>{status === 'ready' ? 'Start mission' : 'Restart mission'} <span>→</span></button>
+      {status !== 'playing' && <div className={`rift-overlay rift-${status}`}>
+        {status === 'loading' ? <>
+          <div className="rift-loading-scene"><i/><i/><b/></div>
+          <span>LOADING THE FIRST TIMELINE</span>
+          <h2>Forging the rift.</h2>
+          <p>Synchronizing physics, portals, terrain, and Chronos combat telemetry.</p>
+          <div className="rift-loadbar"><i/></div>
+        </> : status === 'menu' ? <>
+          <div className="rift-main-menu">
+            <div className="rift-menu-brand"><div className="rift-orbit-logo"><i/><i/><b>C</b></div><span>CHRONOS RIFT</span><h2>The first fracture awaits.</h2><p>A cinematic puzzle-parkour mission built inside your Chronos world.</p></div>
+            <div className="rift-menu-actions">
+              <button onClick={reset}>Begin mission <span>→</span></button>
+              <button onClick={() => { runRef.current = initialRun(); forceFrame((tick) => tick + 1); }}>Reset run</button>
+              <button disabled>Mission 02 soon</button>
+            </div>
+            <aside><span>SAVE PROFILE</span><b>{username}</b><p>Best score {best.toLocaleString()}</p></aside>
+          </div>
+        </> : <>
+          <div className="rift-orbit-logo"><i/><i/><b>C</b></div>
+          <span>{status === 'boot' ? 'CHRONOS STUDIOS' : status === 'won' ? 'MISSION COMPLETE' : 'TIMELINE BROKEN'}</span>
+          <h2>{status === 'boot' ? 'Chronos Rift' : status === 'won' ? 'Rift sealed beautifully.' : 'Rewind the run.'}</h2>
+          <p>{status === 'boot' ? 'Time is opening.' : status === 'won' ? `Final score ${run.score.toLocaleString()}. Best ${best.toLocaleString()}.` : 'The rift punished your route. Try a slower, cleaner line.'}</p>
+          {status !== 'boot' && <button className="gold-button" onClick={reset}>Restart mission <span>→</span></button>}
+        </>}
       </div>}
     </section>
 
