@@ -943,23 +943,26 @@
   }
 }
 
-/* Critical cinematic visibility fix: boot/loading/menu must never be clipped by the page chrome. */
-.rift-page.has-cinematic{
+/* Critical full-stage visibility fix: menu and gameplay must never be clipped by the page chrome. */
+.rift-page.is-fullstage{
   grid-template-rows:minmax(0,1fr);
   gap:0;
   padding:0;
 }
-.rift-page.has-cinematic .rift-hero,
-.rift-page.has-cinematic .rift-manual{
+.rift-page.is-fullstage .rift-hero,
+.rift-page.is-fullstage .rift-manual{
   display:none;
 }
-.rift-page.has-cinematic .rift-console{
+.rift-page.is-fullstage .rift-console{
   width:100%;
   max-width:none;
   height:100%;
   min-height:0;
   border-left:0;
   border-right:0;
+}
+.rift-page.is-fullstage .rift-stage{
+  inset:0;
 }
 .rift-page.has-cinematic .rift-hud,
 .rift-page.has-cinematic .rift-directive{
@@ -989,7 +992,7 @@
   flex:0 0 auto;
 }
 @media (max-width:980px){
-  .rift-page.has-cinematic{
+  .rift-page.is-fullstage{
     height:calc(100dvh - 82px);
     padding:0;
   }
@@ -1006,6 +1009,9 @@
   }
 }
 @media (max-width:560px){
+  .rift-page.is-fullstage{
+    padding:0;
+  }
   .rift-page.has-cinematic .rift-overlay{
     padding:12px;
   }

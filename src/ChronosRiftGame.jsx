@@ -112,6 +112,14 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
   }, []);
 
   useEffect(() => {
+    const raf = requestAnimationFrame(() => setViewSize({
+      width: stageRef.current?.clientWidth || window.innerWidth || 1100,
+      height: stageRef.current?.clientHeight || Math.max(460, window.innerHeight - 180)
+    }));
+    return () => cancelAnimationFrame(raf);
+  }, [status]);
+
+  useEffect(() => {
     if (status !== 'boot') return undefined;
     const loadingTimer = window.setTimeout(() => setStatus('loading'), 1700);
     return () => window.clearTimeout(loadingTimer);
@@ -271,8 +279,9 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
   const worldScale = Math.min(1, Math.max(0.58, viewSize.height / WORLD.height));
   const playerSpeed = Math.min(1, Math.abs(player.vx) / PLAYER.speed);
   const cinematic = ['boot', 'loading', 'menu'].includes(status);
+  const fullStage = ['boot', 'loading', 'menu', 'playing', 'won', 'failed'].includes(status);
 
-  return <main className={`rift-page ${cinematic ? 'has-cinematic' : ''}`}>
+  return <main className={`rift-page ${fullStage ? 'is-fullstage' : ''} ${cinematic ? 'has-cinematic' : ''}`}>
     <section className="rift-hero">
       <div>
         <span>CHRONOS ARCADE / MISSION 01</span>
