@@ -3,8 +3,10 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import './productivity.css';
 import './reader.css';
+import './game.css';
 import NovelReader from './NovelReader.jsx';
 import PL900Trainer from './PL900Trainer.jsx';
+import ChronosRiftGame from './ChronosRiftGame.jsx';
 
 const API_URL = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 const api = (path) => `${API_URL}${path}`;
@@ -50,7 +52,7 @@ const parseChronosRoute = () => {
   const rootIndex = parts[0] === 'chronos' ? 1 : 0;
   const area = parts[rootIndex] || '';
   if (area === 'lobby' && parts[rootIndex + 1]) return { page: 'room', roomId: decodeURIComponent(parts[rootIndex + 1]) };
-  if (['home', 'planner', 'reader', 'trainer', 'lobby', 'admin', 'invite'].includes(area)) return { page: area };
+  if (['home', 'planner', 'reader', 'trainer', 'game', 'lobby', 'admin', 'invite'].includes(area)) return { page: area };
   if (area === 'friend' && parts[rootIndex + 1]) return { page: 'friend', viewing: decodeURIComponent(parts[rootIndex + 1]) };
   return { page: '' };
 };
@@ -181,6 +183,7 @@ function Header({ page, setPage, username, logout, isAdmin = false, unreadCount 
     {username && <button className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}>Planner</button>}
     {username && <button className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}>Reader</button>}
     {username && <button className={page === 'trainer' ? 'active' : ''} onClick={() => setPage('trainer')}>PL-900</button>}
+    {username && <button className={page === 'game' ? 'active' : ''} onClick={() => setPage('game')}>Game</button>}
     {username && <button className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}>Lobby {unreadCount > 0 && <b className="nav-badge">{unreadCount}</b>}</button>}
     {isAdmin && <button className={page === 'admin' ? 'active' : ''} onClick={() => setPage('admin')}>Admin</button>}
   </nav><div className="header-user">{username ? <><span className="online-dot"/>{username}<button className="text-button" onClick={logout}>Exit</button></> : <span>24 hours. Intentionally.</span>}</div></header>{username && <MobileNav page={page} setPage={setPage} unreadCount={unreadCount}/>}</>;
@@ -221,6 +224,7 @@ function MobileNav({ page, setPage, unreadCount = 0 }) {
       <button tabIndex={navTabIndex} className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}><span>Plan</span><small>Planner</small></button>
       <button tabIndex={navTabIndex} className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}><span>Read</span><small>Novel</small></button>
       <button tabIndex={navTabIndex} className={page === 'trainer' ? 'active' : ''} onClick={() => setPage('trainer')}><span>Train</span><small>PL-900</small></button>
+      <button tabIndex={navTabIndex} className={page === 'game' ? 'active' : ''} onClick={() => setPage('game')}><span>Play</span><small>Rift</small></button>
       <button tabIndex={navTabIndex} className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}><span>Circle {unreadCount > 0 && <b>{unreadCount}</b>}</span><small>Lobby</small></button>
     </nav>
     {!visible && <button className="mobile-nav-reveal" onClick={reveal} aria-label="Show page navigation"><span/></button>}
@@ -1084,12 +1088,13 @@ function App() {
       : page === 'lobby' && username ? <SocialLobby username={username} social={social} updateSocial={updateSocial} onEnterRoom={(nextRoom) => { setRoom(nextRoom); pushChronosRoute('room', nextRoom.id); setPage('room'); }}/>
       : page === 'reader' && username ? <NovelReader/>
       : page === 'trainer' && username ? <PL900Trainer/>
+      : page === 'game' && username ? <ChronosRiftGame username={username}/>
       : page === 'planner' && username ? <Planner username={username}/>
       : page === 'home' && username ? <Home username={username} onViewFriend={(name) => { setViewing(name); pushChronosRoute('friend', name); setPage('friend'); }} onOpenPlanner={() => navigate('planner')} onOpenLobby={() => navigate('lobby')}/>
       : <AuthScreen social={social} updateSocial={updateSocial} onLogin={enter}/>} 
     {username && !notificationDismissed && <NotificationPrompt permission={notificationPermission} onEnable={enableNotifications} onDismiss={dismissNotificationPrompt}/>} 
     {liveNotice && <button className="live-notification" onClick={() => { navigate('lobby'); setLiveNotice(null); }}><i/><span><small>LIVE CHRONOS SIGNAL</small><b>{liveNotice.copy}</b><em>Open Lobby →</em></span><strong onClick={(event) => { event.stopPropagation(); setLiveNotice(null); }}>×</strong></button>} 
-    {page !== 'room' && page !== 'reader' && page !== 'trainer' && <Footer/>}
+    {page !== 'room' && page !== 'reader' && page !== 'trainer' && page !== 'game' && <Footer/>}
   </div>;
 }
 
