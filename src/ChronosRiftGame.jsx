@@ -270,8 +270,9 @@ export default function ChronosRiftGame({ username = 'Runner' }) {
   const portalNodes = [mission.portalA, mission.portalB];
   const worldScale = Math.min(1, Math.max(0.58, viewSize.height / WORLD.height));
   const playerSpeed = Math.min(1, Math.abs(player.vx) / PLAYER.speed);
+  const cinematic = ['boot', 'loading', 'menu'].includes(status);
 
-  return <main className="rift-page">
+  return <main className={`rift-page ${cinematic ? 'has-cinematic' : ''}`}>
     <section className="rift-hero">
       <div>
         <span>CHRONOS ARCADE / MISSION 01</span>
