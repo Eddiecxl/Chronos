@@ -28,6 +28,7 @@ export default function NovelReader() {
   const [pageSettling, setPageSettling] = useState(false);
   const viewportRef = useRef(null);
   const flowRef = useRef(null);
+  const contentsRef = useRef(null);
   const gestureRef = useRef({ x: 0, y: 0 });
   const suppressClickRef = useRef(false);
   const pendingLastPageRef = useRef(false);
@@ -188,6 +189,16 @@ export default function NovelReader() {
   const nextChapter = () => openChapter(chapterIndex + 1);
   const previousChapter = () => openChapter(chapterIndex - 1);
 
+  const scrollContentsTo = (edge) => {
+    const contents = contentsRef.current;
+    if (!contents) return;
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    contents.scrollTo({
+      top: edge === 'bottom' ? contents.scrollHeight : 0,
+      behavior: reducedMotion ? 'auto' : 'smooth'
+    });
+  };
+
   const handlePageClick = (event) => {
     if (!isMobile || suppressClickRef.current || panel) return;
     const bounds = event.currentTarget.getBoundingClientRect();
@@ -260,8 +271,18 @@ export default function NovelReader() {
     {panel && <div className="reader-panel-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setPanel(''); }}>
       <section className="reader-panel" role="dialog" aria-modal="true" aria-label={panel === 'contents' ? 'Table of contents' : 'Reading settings'}>
         <header><div><small>CHRONOS READER</small><h2>{panel === 'contents' ? novel.volume : 'Reading settings'}</h2></div><button onClick={() => setPanel('')} aria-label="Close">×</button></header>
-        {panel === 'contents' ? <div className="reader-contents">
-          {novel.chapters.map((item, index) => <button className={index === chapterIndex ? 'active' : ''} key={item.number} onClick={() => openChapter(index)}><span>{String(item.number).padStart(2, '0')}</span><b>{item.title}</b>{index === chapterIndex && <i>READING</i>}</button>)}
+        {panel === 'contents' ? <div className="reader-contents" ref={contentsRef}>
+          <div className="reader-contents-jump reader-contents-jump-top">
+            <div><small>共 {novel.chapters.length} 章</small><strong>快速找到最新进度</strong></div>
+            <button type="button" onClick={() => scrollContentsTo('bottom')} aria-label={`跳到最新章节，第 ${novel.chapters.at(-1).number} 章`}><span>↓</span><b>去最新章节</b></button>
+          </div>
+          <div className="reader-contents-list">
+            {novel.chapters.map((item, index) => <button className={index === chapterIndex ? 'active' : ''} key={item.number} onClick={() => openChapter(index)}><span>{String(item.number).padStart(2, '0')}</span><b>{item.title}</b><i>{index === chapterIndex ? 'READING' : ''}</i></button>)}
+          </div>
+          <div className="reader-contents-jump reader-contents-jump-bottom">
+            <div><small>目录到底</small><strong>第 {novel.chapters.at(-1).number} 章 · {novel.chapters.at(-1).title}</strong></div>
+            <button type="button" onClick={() => scrollContentsTo('top')} aria-label="回到目录最上面"><span>↑</span><b>回到最上面</b></button>
+          </div>
         </div> : <div className="reader-settings">
           <label><span>Text size</span><output>{fontSize}px</output><input type="range" min="16" max="30" step="1" value={fontSize} onChange={(event) => setFontSize(Number(event.target.value))}/></label>
           <div><span>Reading theme</span><div className="reader-theme-options">{themes.map((item) => <button className={theme === item.id ? 'active' : ''} data-theme-preview={item.id} key={item.id} onClick={() => setTheme(item.id)}><i/> {item.label}</button>)}</div></div>
