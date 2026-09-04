@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.7.0",
   "scripts": {
     "dev": "concurrently \"vite\" \"node --env-file-if-exists=.env --watch server/index.js\"",
+    "test": "node --test test/*.test.js",
     "build": "vite build",
     "start": "node --env-file-if-exists=.env server/index.js",
     "preview": "vite preview"
