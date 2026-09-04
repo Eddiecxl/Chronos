@@ -1,14 +1,29 @@
-const SETTINGS_KEY = 'luoying_ai_v2';
+const SETTINGS_KEY = 'luoying_ai_v3';
 const SESSION_KEY = 'chronos-session-token-v1';
 
 export const PROVIDERS = {
-  local: { label: '本地命运线', model: '', credentialMode: 'none', tip: '完全离线，主线、战斗、任务与结局都可正常游玩。' },
-  puter: { label: 'Puter.js', model: 'gpt-4o-mini', credentialMode: 'none', tip: '免 Key；首次使用会载入 Puter 并可能要求登录。' },
-  gemini: { label: 'Google Gemini', model: 'gemini-3.5-flash', credentialMode: 'site', tip: '可使用网站提供的 Key，也可使用自己的 Google AI Studio Key。' },
-  siliconflow: { label: 'SiliconFlow', model: 'Qwen/Qwen2.5-7B-Instruct', baseUrl: 'https://api.siliconflow.cn/v1', credentialMode: 'personal', tip: '适合国内网络；需要自己的 API Key。' },
-  openrouter: { label: 'OpenRouter', model: '', baseUrl: 'https://openrouter.ai/api/v1', credentialMode: 'personal', tip: '可填写任意可用模型；需要自己的 API Key。' },
-  groq: { label: 'Groq', model: 'qwen/qwen3.6-27b', baseUrl: 'https://api.groq.com/openai/v1', credentialMode: 'site', tip: '速度极快；可使用网站 Key 或自己的 Groq Key。' },
-  custom: { label: '自定义接口', model: '', baseUrl: '', credentialMode: 'personal', tip: '支持 OpenAI Chat Completions 兼容接口。' }
+  groq: {
+    label: 'Groq · GPT-OSS', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1',
+    credentialMode: 'site', recommended: true, tip: '高速长文本叙事；可用 Chronos 网站额度或自己的 Groq Key。'
+  },
+  mistral: {
+    label: 'Mistral', model: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1',
+    credentialMode: 'site', recommended: true, tip: '稳定、节奏明快；可用网站额度或自己的 Mistral Key。'
+  },
+  puter: { label: 'Puter.js', model: 'gpt-5-nano', credentialMode: 'none', tip: '免填 Key，首次使用可能要求登录 Puter。' },
+  gemini: {
+    label: 'Google Gemini', model: 'gemini-3.5-flash', credentialMode: 'site', advanced: true,
+    tip: '保留的高级选项；支持网站额度或个人 Google AI Studio Key。'
+  },
+  siliconflow: {
+    label: 'SiliconFlow · Qwen', model: 'Qwen/Qwen2.5-7B-Instruct', baseUrl: 'https://api.siliconflow.cn/v1',
+    credentialMode: 'personal', advanced: true, tip: 'Qwen 高级测试入口，需要个人 API Key。'
+  },
+  openrouter: {
+    label: 'OpenRouter', model: '', baseUrl: 'https://openrouter.ai/api/v1', credentialMode: 'personal', advanced: true,
+    tip: '可填写 OpenRouter 上的任意可用模型，需要个人 API Key。'
+  },
+  custom: { label: '自定义接口', model: '', baseUrl: '', credentialMode: 'personal', advanced: true, tip: 'OpenAI Chat Completions 兼容接口。' }
 };
 
 const cleanText = (value, max) => String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
@@ -39,85 +54,146 @@ function findJsonObject(text) {
   throw new Error('AI 返回的 JSON 不完整。');
 }
 
-export function parseNarration(text) {
+function parseBlocks(data, requestType) {
+  if (!Array.isArray(data.blocks) || !data.blocks.length) throw new Error('AI 返回的 JSON 缺少内容段落。');
+  const blocks = data.blocks.slice(0, 8).map((block) => {
+    const requestedType = ['narr', 'dlg', 'sys'].includes(block?.type) ? block.type : 'narr';
+    if (requestType === 'system' && requestedType !== 'sys') return null;
+    const output = { type: requestedType, text: cleanText(block?.text, 12_000) };
+    if (requestedType === 'dlg') output.name = cleanText(block?.name || '神秘人', 40);
+    return output.text ? output : null;
+  }).filter(Boolean);
+  if (!blocks.length) throw new Error(requestType === 'system' ? 'AI 没有返回系统答复。' : 'AI 返回的剧情内容为空。');
+  return blocks;
+}
+
+function normalizeProgress(progress) {
+  const source = progress && typeof progress === 'object' && !Array.isArray(progress) ? progress : {};
+  const stringList = (value, max = 20) => Array.isArray(value)
+    ? value.map((entry) => cleanText(entry, 160)).filter(Boolean).slice(0, max)
+    : [];
+  const clocks = {};
+  if (source.dangerClocks && typeof source.dangerClocks === 'object' && !Array.isArray(source.dangerClocks)) {
+    for (const [id, delta] of Object.entries(source.dangerClocks).slice(0, 20)) {
+      if (Number.isFinite(Number(delta))) clocks[cleanText(id, 80)] = Number(delta);
+    }
+  }
+  return {
+    advanced: stringList(source.advanced), consequences: stringList(source.consequences),
+    openLoops: stringList(source.openLoops), resolvedLoops: stringList(source.resolvedLoops), dangerClocks: clocks
+  };
+}
+
+function normalizeMemory(memory) {
+  const source = memory && typeof memory === 'object' && !Array.isArray(memory) ? memory : {};
+  const facts = Array.isArray(source.facts) ? source.facts.slice(0, 40).map((fact) => ({
+    subjectId: cleanText(fact?.subjectId, 80), predicate: cleanText(fact?.predicate, 48),
+    object: cleanText(fact?.object, 160), confidence: Number(fact?.confidence ?? 1)
+  })).filter((fact) => fact.subjectId && fact.predicate && fact.object) : [];
+  const entities = Array.isArray(source.entities) ? source.entities.slice(0, 20).map((entity) => ({
+    id: cleanText(entity?.id, 80), kind: cleanText(entity?.kind, 20), name: cleanText(entity?.name, 40),
+    location: cleanText(entity?.location, 80), purpose: cleanText(entity?.purpose, 160),
+    traits: Array.isArray(entity?.traits) ? entity.traits.map((trait) => cleanText(trait, 32)).filter(Boolean).slice(0, 4) : []
+  })).filter((entity) => entity.id && entity.name) : [];
+  const chapterSummary = cleanText(source.chapterSummary, 1200);
+  return { facts, entities, ...(chapterSummary ? { chapterSummary } : {}) };
+}
+
+export function parseNarration(text, requestType = 'world') {
   const json = findJsonObject(text).replace(/,(\s*[}\]])/g, '$1');
   let data;
   try { data = JSON.parse(json); }
   catch (error) { throw new Error(`AI 返回的 JSON 无法解析：${error.message}`); }
-  if (!data || !Array.isArray(data.blocks) || !data.blocks.length) throw new Error('AI 返回的 JSON 缺少剧情段落。');
-  const blocks = data.blocks.slice(0, 8).map((block) => {
-    const type = ['narr', 'dlg', 'sys'].includes(block?.type) ? block.type : 'narr';
-    const output = { type, text: cleanText(block?.text, 1200) };
-    if (type === 'dlg') output.name = cleanText(block?.name || '神秘人', 16);
-    return output;
-  }).filter((block) => block.text);
-  if (!blocks.length) throw new Error('AI 返回的剧情内容为空。');
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('AI 返回内容不是对象。');
+  const blocks = parseBlocks(data, requestType);
+  if (requestType === 'system') return { blocks };
   const suggestions = Array.isArray(data.suggestions)
-    ? data.suggestions.slice(0, 6).map((entry) => typeof entry === 'string'
-      ? { label: cleanText(entry, 24), value: cleanText(entry, 100), icon: '❀' }
-      : { label: cleanText(entry?.label, 24), value: cleanText(entry?.value || entry?.label, 100), icon: cleanText(entry?.icon || '❀', 4) }
-    ).filter((entry) => entry.label && entry.value)
+    ? data.suggestions.slice(0, 5).map((entry) => cleanText(typeof entry === 'string' ? entry : entry?.value || entry?.label, 160)).filter(Boolean)
     : [];
-  return { blocks, effects: data.effects && typeof data.effects === 'object' ? data.effects : {}, suggestions };
+  const usedFactIdsByActor = {};
+  if (data.usedFactIdsByActor && typeof data.usedFactIdsByActor === 'object' && !Array.isArray(data.usedFactIdsByActor)) {
+    for (const [actorId, ids] of Object.entries(data.usedFactIdsByActor).slice(0, 16)) {
+      if (Array.isArray(ids)) usedFactIdsByActor[cleanText(actorId, 80)] = ids.map((id) => cleanText(id, 80)).filter(Boolean).slice(0, 30);
+    }
+  }
+  return {
+    blocks,
+    effects: data.effects && typeof data.effects === 'object' && !Array.isArray(data.effects) ? data.effects : {},
+    progress: normalizeProgress(data.progress),
+    memory: normalizeMemory(data.memory),
+    suggestions,
+    timeCost: ['instant', 'brief', 'scene', 'long'].includes(data.timeCost) ? data.timeCost : 'brief',
+    usedFactIdsByActor,
+    entities: normalizeMemory(data.memory).entities
+  };
 }
 
 export function buildNarrationPrompt(state, history, input) {
-  const inventory = Object.entries(state.inventory?.items || {}).filter(([, amount]) => amount > 0).slice(0, 20);
   const snapshot = {
     name: state.player.name,
     realm: state.player.realm,
     hp: `${state.player.hp}/${state.player.maxHp}`,
-    exp: state.player.exp,
+    qi: `${state.player.qi}`,
+    spirit: `${state.player.spirit}/${state.player.maxSpirit}`,
     gold: state.player.gold,
     act: state.story.act,
     scene: state.story.scene,
     day: state.story.day,
+    period: state.story.period,
     location: state.story.location,
-    inventory,
+    inventory: Object.entries(state.inventory?.items || {}).filter(([, amount]) => amount > 0).slice(0, 20),
     equipment: state.equipment,
     techniques: state.techniques.known.slice(0, 12),
     quests: state.quests.active.slice(0, 8).map((quest) => ({ id: quest.id, progress: quest.progress, target: quest.target })),
     relationships: state.relationships,
     karma: state.karma,
-    flags: Object.keys(state.story.flags).filter((key) => state.story.flags[key]).slice(-40),
-    memory: { summary: state.memory.summary, facts: state.memory.facts.slice(0, 12) }
+    memory: { chapterSummaries: state.memory.chapterSummaries, facts: state.memory.facts.slice(-12) }
   };
-  const recent = (history || []).slice(-16).map((block) => ({
-    type: ['narr', 'dlg', 'sys', 'player'].includes(block.type) ? block.type : 'narr',
-    name: cleanText(block.name, 16) || undefined,
-    text: cleanText(block.text, 500)
+  const recent = (history || []).slice(-10).map((entry) => ({
+    type: ['narr', 'dlg', 'sys', 'player'].includes(entry?.type) ? entry.type : undefined,
+    kind: entry?.kind,
+    name: cleanText(entry?.name, 40) || undefined,
+    text: cleanText(entry?.text, 600) || undefined,
+    blocks: Array.isArray(entry?.blocks) ? entry.blocks.slice(0, 8) : undefined
   }));
-  const system = `你是中文修仙文字游戏《落樱仙途》的叙事增强引擎。玩家就是主角“${state.player.name}”。\n` +
-    '尊重玩家任意行动，角色要真实回应怪话、中英混杂、挑衅、告白和临时改变主意。文风生动、节奏明快，可有日常、幽默、感情、战斗与因果，但不得替玩家决定关键选择。\n' +
-    '必须严格服从当前状态，不得凭空提升境界、制造巨额奖励或复活已死角色。每回合输出 2 至 5 个短段落，并留下可回应的悬念。\n' +
-    '只输出一个严格 JSON 对象，不要代码围栏。格式：{"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"姓名","text":"对白"},{"type":"sys","text":"提示"}],"effects":{"hp":0,"gold":0,"exp":0,"relationships":{"姓名":0},"addItems":{"物品":0},"location":"地点"},"suggestions":["行动一","行动二"]}。\n' +
-    `当前状态：${JSON.stringify(snapshot)}`;
   return [
-    { role: 'system', content: system },
-    { role: 'user', content: `最近剧情：${JSON.stringify(recent)}\n玩家现在说或做：“${cleanText(input, 240)}”\n继续剧情，只输出 JSON。` }
+    {
+      role: 'system',
+      content: `你是中文修仙文字游戏《落樱仙途》的纯 AI 叙事引擎。不得调用或模仿本地预写剧情，不得替玩家决定关键行动或感受。每个世界回合必须带来新信息、后果或目标推进。灵气只用于突破，灵力只用于施展功法。只输出严格 JSON。当前状态：${JSON.stringify(snapshot)}`
+    },
+    {
+      role: 'user',
+      content: `最近记录：${JSON.stringify(recent)}\n玩家原话：“${cleanText(input, 2_000)}”\n输出 blocks、effects、progress、memory、suggestions、timeCost。`
+    }
   ];
 }
 
 function normalizeMessages(messages) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('AI 请求缺少剧情消息。');
-  return messages.slice(0, 12).map((message) => ({
+  const normalized = messages.slice(-16).map((message) => ({
     role: allowedRole(message?.role),
-    content: cleanText(message?.content, 6000)
+    content: cleanText(message?.content, 18_000)
   })).filter((message) => message.content);
+  if (!normalized.length) throw new Error('AI 请求缺少有效消息。');
+  return normalized;
 }
 
 function normalizeSettings(input = {}) {
-  const provider = PROVIDERS[input.provider] ? input.provider : 'local';
+  const provider = PROVIDERS[input.provider] ? input.provider : 'groq';
   const defaults = PROVIDERS[provider];
-  const credentialMode = provider === 'gemini' || provider === 'groq'
-    ? (input.credentialMode === 'personal' ? 'personal' : 'site')
-    : defaults.credentialMode;
+  const siteCapable = ['groq', 'mistral', 'gemini'].includes(provider);
+  const credentialMode = defaults.credentialMode === 'none'
+    ? 'none'
+    : siteCapable && input.credentialMode !== 'personal'
+      ? 'site'
+      : 'personal';
+  const baseUrl = provider === 'custom' ? cleanText(input.baseUrl, 300).replace(/\/+$/, '') : defaults.baseUrl || '';
   return {
     provider,
     credentialMode,
-    key: cleanText(input.key, 300),
-    baseUrl: cleanText(input.baseUrl || defaults.baseUrl, 300).replace(/\/+$/, ''),
-    model: cleanText(input.model || defaults.model, 100)
+    key: cleanText(input.key, 500),
+    baseUrl,
+    model: cleanText(input.model || defaults.model, 140)
   };
 }
 
@@ -164,7 +240,11 @@ async function defaultPuterLoader() {
   if (typeof document === 'undefined') throw new Error('当前环境不能加载 Puter。');
   await new Promise((resolve, reject) => {
     const existing = document.querySelector('script[data-luoying-puter]');
-    if (existing) { existing.addEventListener('load', resolve, { once: true }); existing.addEventListener('error', reject, { once: true }); return; }
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true });
+      existing.addEventListener('error', reject, { once: true });
+      return;
+    }
     const script = document.createElement('script');
     script.src = 'https://js.puter.com/v2/';
     script.dataset.luoyingPuter = 'true';
@@ -177,21 +257,22 @@ async function defaultPuterLoader() {
 
 export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, puterLoader = defaultPuterLoader } = {}) {
   if (!fetchImpl) throw new Error('当前环境不支持网络请求。');
-
   const client = {
     loadSettings() {
       try { return normalizeSettings(JSON.parse(storage?.getItem(SETTINGS_KEY) || '{}')); }
       catch { return normalizeSettings(); }
     },
-    saveSettings(settings) {
-      const clean = normalizeSettings(settings);
-      storage?.setItem(SETTINGS_KEY, JSON.stringify(clean));
+    saveSettings(settingsInput) {
+      const clean = normalizeSettings(settingsInput);
+      const { key: _key, ...safeToPersist } = clean;
+      storage?.setItem(SETTINGS_KEY, JSON.stringify(safeToPersist));
       return clean;
     },
-    async narrate(settingsInput, context) {
+    async narrate(settingsInput, context = {}) {
       const settings = normalizeSettings(settingsInput);
-      const messages = normalizeMessages(context?.messages);
-      if (settings.provider === 'local') throw new Error('当前使用本地命运线。');
+      const messages = normalizeMessages(context.messages);
+      const requestType = cleanText(context.requestType || 'world', 20);
+      const transactionId = cleanText(context.transactionId, 100);
 
       if (settings.provider === 'puter') {
         const puter = await puterLoader();
@@ -203,13 +284,13 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
         return content;
       }
 
-      if ((settings.provider === 'gemini' || settings.provider === 'groq') && settings.credentialMode === 'site') {
+      if (settings.credentialMode === 'site' && ['gemini', 'groq', 'mistral'].includes(settings.provider)) {
         const token = storage?.getItem(SESSION_KEY) || '';
         if (!token) throw new Error('请先登录 Chronos 再使用网站 AI。');
         const data = await requestJson(fetchImpl, '/api/game/ai', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ provider: settings.provider, model: settings.model, messages })
+          body: JSON.stringify({ provider: settings.provider, model: settings.model, messages, requestType, transactionId })
         });
         if (typeof data?.text !== 'string' || !data.text.trim()) throw new Error('网站 AI 返回为空。');
         return data.text;
@@ -226,7 +307,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
         const data = await requestJson(fetchImpl, `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.key },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: systemText }] }, contents, generationConfig: { temperature: 0.9, responseMimeType: 'application/json' } })
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: systemText }] }, contents, generationConfig: { temperature: 0.85, responseMimeType: 'application/json' } })
         });
         return extractGemini(data);
       }
@@ -236,13 +317,15 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
       const data = await requestJson(fetchImpl, `${settings.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.key}` },
-        body: JSON.stringify({ model: settings.model, messages, temperature: 0.9, max_completion_tokens: 1200 })
+        body: JSON.stringify({ model: settings.model, messages, temperature: 0.85, max_tokens: 1800 })
       });
       return extractOpenAi(data);
     },
     async testConnection(settings) {
-      if (settings.provider === 'local') return { ok: true, message: '本地命运线已经就绪。' };
-      await client.narrate(settings, { messages: [{ role: 'user', content: '只回复一个严格 JSON：{"blocks":[{"type":"sys","text":"连接成功"}]}' }] });
+      await client.narrate(settings, {
+        requestType: 'trial', transactionId: `connection-${Date.now()}`,
+        messages: [{ role: 'user', content: '只回复一个严格 JSON：{"blocks":[{"type":"sys","text":"连接成功"}]}' }]
+      });
       return { ok: true, message: `${PROVIDERS[settings.provider]?.label || 'AI'} 连接成功。` };
     }
   };

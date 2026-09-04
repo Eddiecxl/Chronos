@@ -6,7 +6,7 @@ const TIME_COSTS = { instant: 0, brief: 10, scene: 60, long: 240 };
 const EFFECT_CAPS = {
   qi: [0, 80], spirit: [-40, 30], hp: [-80, 40], gold: [-100, 100]
 };
-const PROGRESS_PREFIXES = ['scene:', 'chapter:', 'quest:', 'fact:', 'relationship:', 'danger:', 'battle:', 'discovery:'];
+const PROGRESS_PREFIXES = ['opening:', 'scene:', 'chapter:', 'quest:', 'fact:', 'relationship:', 'danger:', 'battle:', 'discovery:'];
 const PLAYER_PUPPET_PATTERNS = [
   /你(?:立刻|毫不犹豫地|终于)?(?:答应|同意|拒绝|决定|选择|承诺|发誓|加入|背叛|爱上)/,
   /你(?:感到|觉得)(?:无比|非常|由衷)?(?:喜悦|幸福|悔恨|忠诚|爱慕|憎恨)/,

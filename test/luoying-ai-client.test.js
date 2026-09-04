@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildNarrationPrompt, createAiClient, parseNarration } from '../public/luoying-xiantu/ai-client.js';
+import { buildNarrationPrompt, createAiClient, parseNarration, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 
 function fakeStorage(seed = {}) {
@@ -16,6 +16,28 @@ function jsonResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
+const testContext = () => ({
+  requestType: 'trial', transactionId: 'trial-1',
+  messages: [{ role: 'user', content: '只返回严格 JSON。' }]
+});
+
+test('Groq defaults to its production GPT OSS model', () => {
+  assert.equal(PROVIDERS.groq.model, 'openai/gpt-oss-120b');
+});
+
+test('personal Mistral uses its fixed OpenAI-compatible endpoint', async () => {
+  const calls = [];
+  const client = createAiClient({
+    storage: fakeStorage(),
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ choices: [{ message: { content: '{"blocks":[{"type":"sys","text":"连接成功"}]}' } }] });
+    }
+  });
+  await client.narrate({ provider: 'mistral', credentialMode: 'personal', key: 'secret' }, testContext());
+  assert.equal(calls[0].url, 'https://api.mistral.ai/v1/chat/completions');
+});
+
 test('parser preserves model HTML as inert text data', () => {
   const parsed = parseNarration('{"blocks":[{"type":"dlg","name":"魔修","text":"<img src=x onerror=alert(1)>"}]}');
   assert.equal(parsed.blocks[0].text, '<img src=x onerror=alert(1)>');
@@ -25,6 +47,14 @@ test('parser preserves model HTML as inert text data', () => {
 test('parser rejects JavaScript-shaped output instead of evaluating it', () => {
   assert.throws(() => parseNarration("({blocks:[{type:'narr',text:'坏'}]})"), /JSON/);
   assert.equal(globalThis.__luoyingInjected, undefined);
+});
+
+test('paused parser accepts sys blocks and discards every effect field', () => {
+  const parsed = parseNarration(JSON.stringify({
+    blocks: [{ type: 'sys', text: '落霞掌消耗四点灵力。' }, { type: 'narr', text: '世界继续。' }],
+    effects: { gold: 999 }, progress: { advanced: ['illegal'] }, timeCost: 'long'
+  }), 'system');
+  assert.deepEqual(parsed, { blocks: [{ type: 'sys', text: '落霞掌消耗四点灵力。' }] });
 });
 
 test('site Gemini uses the authenticated Chronos proxy', async () => {
@@ -42,6 +72,7 @@ test('site Gemini uses the authenticated Chronos proxy', async () => {
   );
   assert.equal(calls[0].url, '/api/game/ai');
   assert.equal(calls[0].options.headers.Authorization, 'Bearer session');
+  assert.equal(JSON.parse(calls[0].options.body).requestType, 'world');
   assert.match(text, /云开了/);
 });
 

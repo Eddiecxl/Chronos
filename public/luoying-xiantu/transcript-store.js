@@ -4,7 +4,7 @@ const STORE_NAME = 'turns';
 const MAX_TURN_BYTES = 100_000;
 const MAX_IMPORT_BYTES = 4_000_000;
 
-const cleanText = (value, max) => String(value ?? '').replace(/[<>\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, max);
+const cleanText = (value, max) => String(value ?? '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, '').trim().slice(0, max);
 const cleanId = (value, max = 100) => cleanText(value, max).replace(/[^\p{L}\p{N}_.:/\-]/gu, '');
 
 function jsonSize(value) {
@@ -41,6 +41,8 @@ function sanitizeTurn(turn) {
   if (provider) output.provider = provider;
   if (model) output.model = model;
   if (createdAt) output.createdAt = createdAt;
+  const fingerprint = cleanText(turn.fingerprint, 1_000);
+  if (fingerprint) output.fingerprint = fingerprint;
   if (Array.isArray(turn.suggestions)) output.suggestions = turn.suggestions.map((value) => cleanText(value, 160)).filter(Boolean).slice(0, 8);
   if (jsonSize(output) > MAX_TURN_BYTES) throw new Error('单回合记录过大。');
   return output;

@@ -38,7 +38,7 @@ function stableFactId(tuple) {
 }
 
 function turnNumber(turnId, fallback) {
-  const found = String(turnId).match(/(\d+)(?!.*\d)/);
+  const found = String(turnId).match(/^turn-(\d+)$/);
   return found ? Math.max(0, Number(found[1])) : fallback;
 }
 
@@ -108,7 +108,7 @@ export function applyMemoryCandidates(source, candidates = [], turnId = 'unknown
   const state = migrateGameState(source);
   if (!Array.isArray(candidates)) return state;
   const safeTurnId = cleanId(turnId) || 'unknown';
-  const createdAtTurn = turnNumber(safeTurnId, state.memory.turnCount + 1);
+  const createdAtTurn = turnNumber(safeTurnId, Math.max(1, state.memory.turnCount));
 
   for (const raw of candidates.slice(0, 80)) {
     if (!raw || typeof raw !== 'object' || Number(raw.confidence ?? 1) < 0.65) continue;
