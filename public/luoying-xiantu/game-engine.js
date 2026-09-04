@@ -8,7 +8,7 @@ const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 
 const narr = (text) => ({ type: 'narr', text });
 const sys = (text) => ({ type: 'sys', text });
 const dlg = (name, text) => ({ type: 'dlg', name, text });
-const suggestion = (label, value = label, icon = '❀') => ({ label, value, icon });
+const choice = (id, label, command, icon = '❀') => ({ id, label, command, icon });
 const copy = (state) => migrateGameState(structuredClone(state));
 
 function uniquePush(list, value) {
@@ -51,7 +51,7 @@ function addQuest(state, id, blocks) {
 }
 
 function applyReward(state, reward = {}, blocks = []) {
-  if (reward.exp) state.player.exp += reward.exp;
+  if (reward.qi) gainQi(state, reward.qi, blocks);
   if (reward.gold) state.player.gold = Math.max(0, state.player.gold + reward.gold);
   for (const [name, amount] of Object.entries(reward.items || {})) addItem(state, name, amount);
   for (const name of reward.techniques || []) addTechnique(state, name);
@@ -126,17 +126,18 @@ function advanceAct(state, blocks) {
   }
 }
 
-function gainExperience(state, amount, blocks) {
-  state.player.exp += Math.max(0, Math.floor(amount));
+function gainQi(state, amount, blocks) {
+  state.player.qi += Math.max(0, Math.floor(amount));
   const realms = [];
-  while (state.player.realm < REALMS.length - 1 && state.player.exp >= REALMS[state.player.realm].need) {
-    state.player.exp -= REALMS[state.player.realm].need;
+  while (state.player.realm < REALMS.length - 1 && state.player.qi >= REALMS[state.player.realm].need) {
+    state.player.qi -= REALMS[state.player.realm].need;
     state.player.realm += 1;
     state.player.maxHp += 18 + state.player.realm * 2;
     state.player.hp = state.player.maxHp;
     state.player.attack += 4 + Math.floor(state.player.realm / 3);
     state.player.defense += 2 + Math.floor(state.player.realm / 5);
-    state.player.spirit += 3;
+    state.player.maxSpirit += 3;
+    state.player.spirit = state.player.maxSpirit;
     realms.push(REALMS[state.player.realm].name);
   }
   for (const realm of realms) blocks.push(sys(`灵台轰鸣，气机周天圆满——突破至 ${realm}！`));
@@ -186,7 +187,7 @@ function handleIntro(state, raw, blocks) {
   if (pending === 'elder-choice') {
     if (/接受|学|愿意|传功|拜/.test(raw)) {
       addTechnique(state, '落霞掌');
-      gainExperience(state, 28, blocks);
+      gainQi(state, 28, blocks);
       relation(state, '李老', 6);
       blocks.push(narr('李老以竹枝点在你眉心，一缕霞光沿经脉游走。你第一次真正感觉到灵气。'), dlg('李老', '法可教，道得自己走。山上有个落霞宗，去不去？'));
     } else {
@@ -236,8 +237,8 @@ function finishBattle(state, enemy, blocks) {
   state.battle = null;
   state.stats.battlesWon += 1;
   state.player.gold += enemy.gold;
-  gainExperience(state, enemy.exp, blocks);
-  blocks.push(narr(`${enemy.name}再也无力追击。你收敛气息，从这一战里悟出新的东西。`), sys(`战斗胜利 · 灵力 +${enemy.exp} · 灵石 +${enemy.gold}`));
+  gainQi(state, enemy.qi, blocks);
+  blocks.push(narr(`${enemy.name}再也无力追击。你收敛气息，从这一战里悟出新的东西。`), sys(`战斗胜利 · 灵气 +${enemy.qi} · 灵石 +${enemy.gold}`));
   unlockAchievement(state, 'first-blood', blocks);
   if (wasStronger) unlockAchievement(state, 'punching-up', blocks);
   progressQuest(state, 'outer-trial', 1, blocks);
@@ -266,7 +267,7 @@ function useBattleItem(state, raw, blocks) {
   addItem(state, name, -1);
   if (item.heal) state.player.hp = Math.min(state.player.maxHp, state.player.hp + item.heal);
   if (item.damage && state.battle) state.battle.hp = Math.max(0, state.battle.hp - item.damage);
-  if (item.exp) gainExperience(state, item.exp, blocks);
+  if (item.qi) gainQi(state, item.qi, blocks);
   blocks.push(sys(`你使用了 ${name}。`));
   return true;
 }
@@ -287,7 +288,7 @@ function handleBattle(state, raw, random, blocks) {
     enemyTurn(state, enemy, random, blocks, 0.9);
   } else if (/防|守|格挡/.test(raw)) {
     state.battle.defending = true;
-    state.player.spirit = Math.min(100 + state.player.realm * 5, state.player.spirit + 5);
+    state.player.spirit = Math.min(state.player.maxSpirit, state.player.spirit + 5);
     blocks.push(narr('你沉肩稳息，把灵力收束成护体气障。'));
     enemyTurn(state, enemy, random, blocks);
   } else if (/丹|符|药|使用/.test(raw) && useBattleItem(state, raw, blocks)) {
@@ -296,6 +297,17 @@ function handleBattle(state, raw, random, blocks) {
     const techniqueName = state.techniques.equipped.find((name) => raw.includes(name))
       || (/功法|绝招|技能/.test(raw) ? state.techniques.equipped.find((name) => TECHNIQUES[name]?.kind === 'attack') : null);
     const technique = TECHNIQUES[techniqueName];
+    if (technique && state.player.spirit < technique.cost) {
+      blocks.push(sys(`灵力不足：施展《${techniqueName}》需要 ${technique.cost} 点灵力。`));
+      enemyTurn(state, enemy, random, blocks);
+      if (state.player.hp <= 0) {
+        state.battle = null;
+        return { ending: finishEnding(state, 'fallen', blocks) };
+      }
+      state.battle.turn += 1;
+      return { ending: null };
+    }
+    if (technique) state.player.spirit -= technique.cost;
     const multiplier = technique?.power || 1;
     const damage = Math.max(1, Math.round((currentAttack(state) * multiplier - enemy.defense * 0.55) * (0.9 + random() * 0.25)));
     state.battle.hp = Math.max(0, state.battle.hp - damage);
@@ -334,9 +346,9 @@ function cultivate(state, raw, random, blocks) {
   const retreat = /闭关|苦修|整日/.test(raw);
   const amount = retreat ? 52 + state.player.realm * 15 : 22 + state.player.realm * 8;
   state.story.day += retreat ? 3 : 1;
-  gainExperience(state, amount, blocks);
+  gainQi(state, amount, blocks);
   state.techniques.mastery['吐纳'] = clamp((state.techniques.mastery['吐纳'] || 0) + 1, 0, 100);
-  blocks.push(narr(retreat ? '洞门合拢，三日晨昏被压成一息。你让每一缕灵气都沿经脉走到尽头。' : '你盘膝收心，呼吸渐渐与山间风声重合。'), sys(`修炼完成 · 灵力 +${amount}`));
+  blocks.push(narr(retreat ? '洞门合拢，三日晨昏被压成一息。你让每一缕灵气都沿经脉走到尽头。' : '你盘膝收心，呼吸渐渐与山间风声重合。'), sys(`修炼完成 · 灵气 +${amount}`));
   progressQuest(state, 'outer-trial', 1, blocks);
   progressQuest(state, 'read-stars', 1, blocks);
   if (random() < 0.22) triggerRandomEvent(state, random, blocks);
@@ -348,7 +360,7 @@ function triggerRandomEvent(state, random, blocks) {
   const event = candidates[Math.floor(random() * candidates.length) % candidates.length];
   uniquePush(state.story.completedEvents, event.id);
   blocks.push(narr(event.text));
-  if (event.effect.exp) gainExperience(state, event.effect.exp, blocks);
+  if (event.effect.qi) gainQi(state, event.effect.qi, blocks);
   if (event.effect.gold) state.player.gold += event.effect.gold;
   if (event.effect.mercy) state.karma.mercy = clamp(state.karma.mercy + event.effect.mercy, -20, 20);
   if (event.effect.ambition) state.karma.ambition = clamp(state.karma.ambition + event.effect.ambition, -20, 20);
@@ -393,7 +405,7 @@ function talk(state, raw, blocks) {
 }
 
 function showStatus(state, blocks) {
-  blocks.push(sys(`${state.player.name} · ${REALMS[state.player.realm].name} · 气血 ${state.player.hp}/${state.player.maxHp} · 灵力 ${state.player.exp}/${REALMS[state.player.realm].need} · 灵石 ${state.player.gold} · 第 ${state.story.day} 日 · ${state.story.location}`));
+  blocks.push(sys(`${state.player.name} · ${REALMS[state.player.realm].name} · 气血 ${state.player.hp}/${state.player.maxHp} · 灵气 ${state.player.qi}/${REALMS[state.player.realm].need} · 灵力 ${state.player.spirit}/${state.player.maxSpirit} · 灵石 ${state.player.gold} · 第 ${state.story.day} 日 · ${state.story.location}`));
 }
 
 function showQuests(state, blocks) {
@@ -407,6 +419,46 @@ function showQuests(state, blocks) {
 function showInventory(state, blocks) {
   const items = Object.entries(state.inventory.items).filter(([, amount]) => amount > 0).map(([name, amount]) => `${name}×${amount}`);
   blocks.push(sys(`背包：${items.join('、') || '空'}。装备：${state.equipment.weapon || '无武器'} / ${state.equipment.armor || '无护甲'}。`));
+}
+
+function useOrEquipItem(state, raw, blocks) {
+  const name = Object.keys(state.inventory.items).find((item) => raw.includes(item) && state.inventory.items[item] > 0);
+  const item = ITEMS[name];
+  if (!item) return false;
+  if (/装备|穿上|佩戴/.test(raw) && ['weapon', 'armor', 'accessory'].includes(item.type)) {
+    state.equipment[item.type] = name;
+    blocks.push(sys(`已经装备 ${name}。${item.description}`));
+    return true;
+  }
+  if (/使用|服用|吃|吞/.test(raw) && item.type === 'consumable') {
+    addItem(state, name, -1);
+    if (item.heal) state.player.hp = Math.min(state.player.maxHp, state.player.hp + item.heal);
+    if (item.qi) gainQi(state, item.qi, blocks);
+    blocks.push(sys(`已经使用 ${name}。${item.description}`));
+    return true;
+  }
+  return false;
+}
+
+function refinePill(state, raw, random, blocks) {
+  if (!/炼|开炉/.test(raw)) return false;
+  const recipe = raw.includes('聚气丹')
+    ? { output: '聚气丹', ingredients: { '凝露花': 2, '赤焰果': 1 } }
+    : { output: '回春丹', ingredients: { '止血草': 2, '凝露花': 1 } };
+  const missing = Object.entries(recipe.ingredients).find(([name, amount]) => (state.inventory.items[name] || 0) < amount);
+  if (missing) {
+    blocks.push(sys(`炼制 ${recipe.output} 还缺少 ${missing[0]}×${missing[1] - (state.inventory.items[missing[0]] || 0)}。`));
+    return true;
+  }
+  for (const [name, amount] of Object.entries(recipe.ingredients)) addItem(state, name, -amount);
+  if (random() < 0.82) {
+    addItem(state, recipe.output, 1);
+    state.stats.pillsCrafted += 1;
+    unlockAchievement(state, 'pill-maker', blocks);
+    progressQuest(state, 'alchemy-start', 1, blocks);
+    blocks.push(narr('炉盖轻震，药香凝而不散。一枚圆润丹药落入玉盘。'), sys(`炼丹成功 · ${recipe.output} +1`));
+  } else blocks.push(narr('炉中火候忽然偏了半分。药材化为一撮气味复杂的灰，但你记住了失败的脉络。'), sys('炼丹失败，材料已经消耗。'));
+  return true;
 }
 
 function localFreeform(state, raw, random, blocks) {
@@ -450,9 +502,14 @@ function weirdReply(raw) {
 export function applyValidatedEffects(source, effects = {}) {
   const state = copy(source);
   if (!effects || typeof effects !== 'object') return state;
-  if (Number.isFinite(Number(effects.hp))) state.player.hp = clamp(state.player.hp + clamp(effects.hp, -80, 40), 1, state.player.maxHp);
+  const hpBeforeEffects = state.player.hp;
+  const qiEffect = effects.qi ?? effects.exp;
+  if (Number.isFinite(Number(qiEffect)) && Number(qiEffect) > 0) gainQi(state, clamp(qiEffect, 0, 80), []);
+  if (Number.isFinite(Number(effects.spirit))) {
+    state.player.spirit = clamp(state.player.spirit + clamp(effects.spirit, -40, 30), 0, state.player.maxSpirit);
+  }
+  if (Number.isFinite(Number(effects.hp))) state.player.hp = clamp(hpBeforeEffects + clamp(effects.hp, -80, 40), 1, state.player.maxHp);
   if (Number.isFinite(Number(effects.gold))) state.player.gold = Math.max(0, state.player.gold + clamp(effects.gold, -100, 100));
-  if (Number.isFinite(Number(effects.exp)) && Number(effects.exp) > 0) gainExperience(state, clamp(effects.exp, 0, 80), []);
   if (effects.relationships && typeof effects.relationships === 'object') {
     for (const [name, amount] of Object.entries(effects.relationships)) if (Number.isFinite(Number(amount))) relation(state, name, clamp(amount, -20, 20));
   }
@@ -469,30 +526,105 @@ export function applyValidatedEffects(source, effects = {}) {
   return migrateGameState(state);
 }
 
-export function getAvailableActions(state) {
-  if (state.battle) return [
-    suggestion('攻击', '攻击', '⚔'), suggestion('施展功法', '施展功法', '✨'), suggestion('防御', '防御', '🛡'),
-    suggestion('使用回春丹', '使用回春丹', '💊'), suggestion('逃跑', '逃跑', '💨')
-  ];
+function battleChoices(state) {
+  const actions = [choice('battle:attack', '攻击', '攻击', '⚔')];
+  for (const name of state.techniques.equipped) {
+    const technique = TECHNIQUES[name];
+    if (technique?.kind === 'attack' && state.player.realm >= technique.realm) {
+      actions.push(choice(`battle:technique:${name}`, name, name, '✨'));
+    }
+  }
+  actions.push(choice('battle:defend', '防御', '防御', '🛡'));
+  if ((state.inventory.items['回春丹'] || 0) > 0) actions.push(choice('battle:item:回春丹', '使用回春丹', '使用回春丹', '💊'));
+  actions.push(choice('battle:flee', '逃跑', '逃跑', '💨'));
+  return actions;
+}
+
+function pendingChoices(state) {
   const pending = state.pending?.type;
   const pendingActions = {
-    'intro-name': [suggestion('报上名字', '我叫顾长生', '🌸')],
-    'intro-escape': [suggestion('推开柴门', '推开柴门', '🚪')],
-    'help-xiaoman': [suggestion('帮助林小满', '帮助林小满', '🤝'), suggestion('制造混乱脱身', '制造混乱带她脱身', '💨')],
-    'elder-choice': [suggestion('接受传功', '接受李老传功', '📜'), suggestion('保持戒心', '先观察再决定', '👁')],
-    'travel-sect': [suggestion('前往落霞宗', '前往落霞宗', '⛩')],
-    'final-choice': [suggestion('飞升', '斩开天门飞升', '☁'), suggestion('守护人间', '留下守护人间', '🌸'), suggestion('山海同游', '与故人山海同游', '🛶'), suggestion('执掌幽冥', '吞噬裂隙执掌魔道', '🌑')]
+    'intro-escape': [choice('intro:open-door', '推开柴门', '推开柴门', '🚪')],
+    'help-xiaoman': [
+      choice('intro:help-xiaoman', '帮助林小满', '帮助林小满', '🤝'),
+      choice('intro:create-diversion', '制造混乱脱身', '制造混乱带她脱身', '💨')
+    ],
+    'elder-choice': [
+      choice('intro:accept-teaching', '接受传功', '接受李老传功', '📜'),
+      choice('intro:stay-wary', '保持戒心', '先观察再决定', '👁')
+    ],
+    'travel-sect': [choice('intro:travel-sect', '前往落霞宗', '前往落霞宗', '⛩')]
   };
-  if (pendingActions[pending]) return pendingActions[pending];
-  const actions = [suggestion('修炼', '打坐修炼', '🧘'), suggestion('闭关', '闭关苦修三日', '⌛'), suggestion('任务', '查看任务', '📜')];
-  if (state.player.hp < state.player.maxHp) actions.push(suggestion('休息', '休息疗伤', '🛏'));
-  actions.push(suggestion('探索', `探索${state.story.location}`, '🧭'));
+  if (pending === 'final-choice') {
+    const actions = [choice('ending:ascension', '飞升', '斩开天门飞升', '☁')];
+    if (state.karma.mercy >= 5) actions.push(choice('ending:guardian', '守护人间', '留下守护人间', '🌸'));
+    actions.push(choice('ending:wanderer', '山海同游', '与故人山海同游', '🛶'));
+    if (state.karma.demonic >= 4) actions.push(choice('ending:demonic', '执掌幽冥', '吞噬裂隙执掌魔道', '🌑'));
+    return actions;
+  }
+  return pendingActions[pending] || null;
+}
+
+function primaryChoices(state) {
+  if (state.battle) return battleChoices(state);
+  const pending = pendingChoices(state);
+  if (pending) return pending;
+  const actions = [
+    choice('train:meditate', '修炼', '打坐修炼', '🧘'),
+    choice('train:retreat', '闭关', '闭关苦修三日', '⌛')
+  ];
+  if (state.player.hp < state.player.maxHp) actions.push(choice('rest', '休息', '休息疗伤', '🛏'));
+  actions.push(choice('explore', '探索', `探索${state.story.location}`, '🧭'));
+  actions.push(choice('battle:start', '挑战', '挑战附近对手', '⚔'));
   const npc = Object.entries(NPCS).find(([, data]) => data.location === state.story.location)?.[0];
-  if (npc) actions.push(suggestion(`找${npc}`, `找${npc}聊聊`, '💬'));
+  if (npc) actions.push(choice(`talk:${npc}`, `找${npc}`, `找${npc}聊聊`, '💬'));
   return actions.slice(0, 7);
 }
 
-export function dispatchLocalAction(source, input, random = Math.random) {
+function panelChoices(state, panel) {
+  if (state.battle || state.pending) return [];
+  if (panel === 'inventory') {
+    return Object.entries(state.inventory.items).flatMap(([name, amount]) => {
+      const item = ITEMS[name];
+      if (!item || amount <= 0) return [];
+      if (item.type === 'consumable') return [choice(`item:use:${name}`, `使用${name}`, `使用${name}`, '💊')];
+      if (['weapon', 'armor', 'accessory'].includes(item.type)) return [choice(`item:equip:${name}`, `装备${name}`, `装备${name}`, '⚔')];
+      return [];
+    });
+  }
+  if (panel === 'travel') {
+    return Object.entries(LOCATIONS)
+      .filter(([name, requirement]) => name !== state.story.location && state.story.act >= requirement.act && state.player.realm >= requirement.realm)
+      .map(([name, data]) => choice(`travel:${name}`, `前往${name}`, `前往${name}`, data.icon));
+  }
+  if (panel === 'alchemy') {
+    const recipes = [
+      { name: '回春丹', ingredients: { '止血草': 2, '凝露花': 1 } },
+      { name: '聚气丹', ingredients: { '凝露花': 2, '赤焰果': 1 } }
+    ];
+    return recipes
+      .filter((recipe) => Object.entries(recipe.ingredients).every(([name, amount]) => (state.inventory.items[name] || 0) >= amount))
+      .map((recipe) => choice(`alchemy:${recipe.name}`, `炼制${recipe.name}`, `炼制${recipe.name}`, '⚗'));
+  }
+  return [];
+}
+
+function legalChoices(state) {
+  const primary = primaryChoices(state);
+  if (state.battle || state.pending) return primary;
+  return [...primary, ...panelChoices(state, 'inventory'), ...panelChoices(state, 'travel'), ...panelChoices(state, 'alchemy')];
+}
+
+const toPublicChoice = ({ command: _command, ...action }) => action;
+
+export function getAvailableActions(state) {
+  return primaryChoices(state).map(toPublicChoice);
+}
+
+export function getLocalPanelActions(state, panel) {
+  return panelChoices(state, panel).map(toPublicChoice);
+}
+
+function dispatchLocalCommand(source, input, random = Math.random) {
   const state = copy(source);
   const raw = String(input ?? '').trim().slice(0, 240);
   const blocks = [];
@@ -508,9 +640,9 @@ export function dispatchLocalAction(source, input, random = Math.random) {
   if (!ending && state.battle) ending = handleBattle(state, raw, random, blocks)?.ending || null;
   else if (!ending && /面板|状态|属性/.test(raw)) showStatus(state, blocks);
   else if (!ending && /任务|日志/.test(raw)) showQuests(state, blocks);
-  else if (!ending && /背包|物品|装备/.test(raw)) showInventory(state, blocks);
+  else if (!ending && /背包|物品|查看装备/.test(raw)) showInventory(state, blocks);
   else if (!ending && /图鉴|成就/.test(raw)) blocks.push(sys(`图鉴：人物 ${state.codex.characters.length} · 地点 ${state.codex.locations.length} · 物品 ${state.codex.items.length} · 结局 ${state.codex.endings.length}/5。成就 ${state.achievements.unlocked.length}/${Object.keys(ACHIEVEMENTS).length}。`));
-  else if (!ending && /回忆|之前|发生过/.test(raw)) blocks.push(narr(state.memory.summary || `你从赵府柴房醒来，至今已走到${state.story.location}。真正重要的选择，会留在任务、关系与因果之中。`));
+  else if (!ending && /回忆|之前|发生过/.test(raw)) blocks.push(narr(Object.values(state.memory.chapterSummaries).at(-1) || `你从赵府柴房醒来，至今已走到${state.story.location}。真正重要的选择，会留在任务、关系与因果之中。`));
   else if (!ending && /修炼|打坐|吐纳|闭关|苦修/.test(raw)) cultivate(state, raw, random, blocks);
   else if (!ending && /签到/.test(raw)) {
     const key = `signedDay${state.story.day}`;
@@ -523,6 +655,8 @@ export function dispatchLocalAction(source, input, random = Math.random) {
     state.story.day += 1;
     blocks.push(narr('你收起杂念好好睡了一觉。修仙者也需要枕头，这是许多传记不肯写的事实。'), sys(`气血恢复 ${heal} 点。`));
   }
+  else if (!ending && useOrEquipItem(state, raw, blocks)) { /* handled */ }
+  else if (!ending && refinePill(state, raw, random, blocks)) { /* handled */ }
   else if (!ending && /去|前往|动身|返回/.test(raw) && travel(state, raw, blocks)) { /* handled */ }
   else if (!ending && talk(state, raw, blocks)) { /* handled */ }
   else if (!ending && /挑战|战斗|攻击|打一架|出剑/.test(raw)) startBattle(state, locationEnemy(state), blocks);
@@ -535,6 +669,18 @@ export function dispatchLocalAction(source, input, random = Math.random) {
   advanceAct(state, blocks);
   state.player.hp = clamp(state.player.hp, ending?.id === 'fallen' ? 0 : 1, state.player.maxHp);
   return { state: migrateGameState(state), blocks, suggestions: getAvailableActions(state), autosave: true, ...(ending ? { ending } : {}) };
+}
+
+export function dispatchLocalChoice(source, choiceId, random = Math.random) {
+  const state = copy(source);
+  if (state.mode !== 'local') {
+    return { state, blocks: [sys('AI 旅程不能调用本地剧情选项。')], suggestions: getAvailableActions(state), autosave: false };
+  }
+  const selected = legalChoices(state).find((action) => action.id === String(choiceId ?? ''));
+  if (!selected) {
+    return { state, blocks: [sys('这个选项当前不可用。请选择画面中提供的行动。')], suggestions: getAvailableActions(state), autosave: false };
+  }
+  return dispatchLocalCommand(state, selected.command, random);
 }
 
 export { ACHIEVEMENTS, ENDINGS, ITEMS, LOCATIONS, NPCS, QUESTS, REALMS, STORY_SCENES, TECHNIQUES };
