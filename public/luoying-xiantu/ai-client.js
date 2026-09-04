@@ -59,7 +59,10 @@ function parseBlocks(data, requestType) {
     const requestedType = ['narr', 'dlg', 'sys'].includes(block?.type) ? block.type : 'narr';
     if (requestType === 'system' && requestedType !== 'sys') return null;
     const output = { type: requestedType, text: cleanText(block?.text, 12_000) };
-    if (requestedType === 'dlg') output.name = cleanText(block?.name || '神秘人', 40);
+    if (requestedType === 'dlg') {
+      output.name = cleanText(block?.name || '神秘人', 40);
+      if (Array.isArray(block?.factIds)) output.factIds = block.factIds.map((id) => cleanText(id, 80)).filter(Boolean).slice(0, 20);
+    }
     return output.text ? output : null;
   }).filter(Boolean);
   if (!blocks.length) throw new Error(requestType === 'system' ? 'AI 没有返回系统答复。' : 'AI 返回的剧情内容为空。');

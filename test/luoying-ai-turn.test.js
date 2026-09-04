@@ -3,6 +3,16 @@ import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { createTranscriptStore } from '../public/luoying-xiantu/transcript-store.js';
 import { createAiTurnRunner } from '../public/luoying-xiantu/ai-turn.js';
+import { createStorage } from '../public/luoying-xiantu/storage.js';
+
+function memoryStorage(seed = {}) {
+  const values = new Map(Object.entries(seed));
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: (key) => values.delete(key)
+  };
+}
 
 function seededAiState() {
   const state = createGameState('照月', 'ai', () => 'ai-journey');
@@ -127,6 +137,33 @@ test('autosave failure compensates the transcript and reports an unchanged AI tu
   assert.equal(JSON.stringify(state), before);
   assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
   assert.match(result.error, /quota full/);
+});
+
+test('a durable journal recovers a committed world turn after transcript storage fails', async () => {
+  const backing = createTranscriptStore({ memory: new Map() });
+  let failAppend = true;
+  const transcripts = {
+    recentTurns: (...args) => backing.recentTurns(...args),
+    allTurns: (...args) => backing.allTurns(...args),
+    appendTurn: (...args) => failAppend ? Promise.reject(new Error('indexeddb unavailable')) : backing.appendTurn(...args),
+    deleteTurn: (...args) => backing.deleteTurn(...args)
+  };
+  const storage = createStorage(memoryStorage());
+  const state = seededAiState();
+  storage.saveAuto('ai', state);
+  const runner = createAiTurnRunner({
+    aiClient: { narrate: async () => validWorldResponse() },
+    transcriptStore: transcripts, stateStore: storage, idFactory: () => 'tx-journal'
+  });
+  const result = await runner.runWorld({ state, input: '查看门缝', settings: { provider: 'groq' } });
+  assert.equal(result.ok, true);
+  assert.equal(storage.loadAuto('ai').transactionJournal.turn.id, 'tx-journal');
+  assert.deepEqual(await backing.allTurns(state.journeyId), []);
+
+  failAppend = false;
+  const recovered = await storage.recoverPendingTurn('ai', storage.loadAuto('ai'), transcripts);
+  assert.equal(recovered.transactionJournal, null);
+  assert.equal((await backing.allTurns(state.journeyId))[0].id, 'tx-journal');
 });
 
 test('provider switching changes only the next request and keeps one AI journey', async () => {

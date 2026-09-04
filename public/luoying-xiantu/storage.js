@@ -127,6 +127,14 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
       assertSlot(slot);
       return read(slotKey(mode, slot), mode);
     },
+    activateSlotAsAuto(mode, slot) {
+      assertMode(mode);
+      assertSlot(slot);
+      const loaded = read(slotKey(mode, slot), mode);
+      if (!loaded) throw new Error('这个命簿无法读取。');
+      storage.setItem(autoKey(mode), serializeState(mode, loaded));
+      return read(autoKey(mode), mode);
+    },
     saveSlot(mode, slot, state) {
       assertMode(mode);
       assertSlot(slot);
@@ -186,6 +194,21 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
       if (previous?.journeyId && !journeyIsReferenced(previous.journeyId, mode, slot)) {
         try { await transcriptStore.deleteJourney(previous.journeyId); } catch { /* orphan cleanup is best effort */ }
       }
+    },
+    async recoverPendingTurn(mode, state, transcriptStore) {
+      assertMode(mode);
+      if (!transcriptStore?.appendTurn) throw new Error('游戏记录存储不可用。');
+      const clean = migrateGameState(state, mode);
+      const journal = clean.transactionJournal;
+      if (!journal?.turn) return clean;
+      const current = read(autoKey(mode), mode);
+      if (current && current.journeyId !== clean.journeyId) {
+        throw new Error('自动存档已在另一窗口改变；没有恢复旧分支的待写回合。');
+      }
+      await transcriptStore.appendTurn(clean.journeyId, journal.turn);
+      const recovered = migrateGameState({ ...clean, transactionJournal: null }, mode);
+      storage.setItem(autoKey(mode), serializeState(mode, recovered));
+      return recovered;
     },
     getSlotMeta(mode, slot) {
       assertMode(mode);

@@ -51,6 +51,15 @@ test('parser preserves model HTML as inert text data', () => {
   assert.equal(parsed.blocks[0].html, undefined);
 });
 
+test('parser preserves per-dialogue fact citations for local validation', () => {
+  const parsed = parseNarration(JSON.stringify({
+    blocks: [{ type: 'dlg', name: '林小满', text: '我昨夜看见了足迹。', factIds: ['fact:forest-footprints'] }],
+    effects: {}, progress: { advanced: ['discovery:forest-footprints'] }, memory: {},
+    suggestions: ['追问方向', '检查泥土'], timeCost: 'brief'
+  }));
+  assert.deepEqual(parsed.blocks[0].factIds, ['fact:forest-footprints']);
+});
+
 test('parser rejects JavaScript-shaped output instead of evaluating it', () => {
   assert.throws(() => parseNarration("({blocks:[{type:'narr',text:'坏'}]})"), /JSON/);
   assert.equal(globalThis.__luoyingInjected, undefined);

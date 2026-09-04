@@ -143,6 +143,22 @@ test('manual journey slots fork a transcript snapshot instead of sharing future 
   assert.deepEqual((await transcripts.allTurns(live.journeyId)).map((turn) => turn.id), ['before-save', 'after-save']);
 });
 
+test('loading a manual AI slot activates its branch for the next conditional autosave', async () => {
+  let id = 0;
+  const adapter = createStorage(memoryStorage(), { idFactory: () => `branch-${++id}` });
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const live = createGameState('照月', 'ai', () => 'live-main');
+  adapter.saveAuto('ai', live);
+  const snapshot = await adapter.saveJourneySlot('ai', 'slot1', live, transcripts);
+  live.player.gold = 88;
+  adapter.saveAuto('ai', live);
+  const activated = adapter.activateSlotAsAuto('ai', 'slot1');
+  activated.player.gold = 3;
+  assert.doesNotThrow(() => adapter.saveAutoIfJourney('ai', activated, snapshot.journeyId));
+  assert.equal(adapter.loadAuto('ai').journeyId, snapshot.journeyId);
+  assert.equal(adapter.loadAuto('ai').player.gold, 3);
+});
+
 test('import always rekeys a journey and cannot replace an existing transcript with the same id', async () => {
   const adapter = createStorage(memoryStorage(), { idFactory: () => 'safe-import-copy' });
   const transcripts = createTranscriptStore({ memory: new Map() });

@@ -16,10 +16,10 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 3. 每回合必须产生新信息、明确后果或目标进展；不得复述、拖延或绕圈。
 4. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。
 5. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
-6. 每个已有 NPC 的对白都必须在 usedFactIdsByActor 以角色 ID 声明引用；没有引用时也要写空数组。
+6. 每段 NPC 对白都要在该 dlg 块的 factIds 列出实际引用的已知事实；不得用空引用说出秘密或情报。usedFactIdsByActor 同时给出角色汇总。
 7. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
-{"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白"}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"suggestions":["行动一","行动二"],"timeCost":"instant|brief|scene|long"}`;
+{"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"suggestions":["行动一","行动二"],"timeCost":"instant|brief|scene|long"}`;
 
 const cleanText = (value, max = 2_000) => String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
 const defaultId = () => globalThis.crypto?.randomUUID?.() || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -109,7 +109,11 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
     const cleanInput = cleanText(input, 2_000);
     const txId = cleanText(transactionId || idFactory(), 100);
     try {
-      const state = migrateGameState(source, 'ai');
+      let state = migrateGameState(source, 'ai');
+      if (state.transactionJournal) {
+        if (!stateStore?.recoverPendingTurn) throw new Error('上一回合仍待恢复，请重新读取自动存档。');
+        state = await stateStore.recoverPendingTurn('ai', state, transcriptStore);
+      }
       contract = createSceneContract(state, cleanInput, txId);
       const locationId = LOCATIONS[state.story.location]?.id;
       const memoryPacket = selectRelevantMemory(state, {
@@ -164,16 +168,26 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
         fingerprint: validation.fingerprint,
         createdAt: new Date(now()).toISOString()
       };
-      await transcriptStore.appendTurn(committed.journeyId, turn);
       if (stateStore) {
         try {
-          if (stateStore.saveAutoIfJourney) stateStore.saveAutoIfJourney('ai', committed, state.journeyId);
-          else stateStore.saveAuto('ai', committed);
+          const journaled = migrateGameState({
+            ...committed,
+            transactionJournal: { type: 'ai-world-turn', turn }
+          }, 'ai');
+          if (stateStore.saveAutoIfJourney) stateStore.saveAutoIfJourney('ai', journaled, state.journeyId);
+          else stateStore.saveAuto('ai', journaled);
+          try {
+            await transcriptStore.appendTurn(committed.journeyId, turn);
+            committed = migrateGameState({ ...committed, transactionJournal: null }, 'ai');
+            if (stateStore.saveAutoIfJourney) stateStore.saveAutoIfJourney('ai', committed, state.journeyId);
+            else stateStore.saveAuto('ai', committed);
+          } catch {
+            committed = journaled;
+          }
         } catch (error) {
-          await transcriptStore.deleteTurn(committed.journeyId, turn.id);
           throw error;
         }
-      }
+      } else await transcriptStore.appendTurn(committed.journeyId, turn);
       return { ok: true, state: committed, blocks: narration.blocks, suggestions: narration.suggestions, turn };
     } catch (error) {
       return failure(error, cleanInput, txId, contract);

@@ -7,6 +7,12 @@ const EFFECT_CAPS = {
   qi: [0, 80], spirit: [-40, 30], hp: [-80, 40], gold: [-100, 100]
 };
 const PROGRESS_PREFIXES = ['opening:', 'scene:', 'chapter:', 'quest:', 'fact:', 'relationship:', 'danger:', 'battle:', 'discovery:'];
+const AUTHORED_FACTS = {
+  'fact:forest-footprints': {
+    progressId: 'discovery:forest-footprints',
+    subjectId: 'location:cherry-forest', predicate: 'contains', object: '后山出现了不属于落霞宗的魔修足迹'
+  }
+};
 const PLAYER_PUPPET_PATTERNS = [
   /你(?:立刻|毫不犹豫地|终于)?(?:答应|同意|拒绝|决定|选择|承诺|发誓|加入|背叛|爱上)/,
   /你(?:感到|觉得)(?:无比|非常|由衷)?(?:喜悦|幸福|悔恨|忠诚|爱慕|憎恨)/,
@@ -81,6 +87,11 @@ export function createSceneContract(source, input, turnId) {
     chapter: {
       id: chapter.id, act: chapter.act, entry: chapter.entry,
       requiredFacts: [...chapter.requiredFacts], optionalThreads: [...chapter.optionalThreads],
+      requiredDiscoveries: chapter.requiredFacts.map((factId) => ({
+        factId,
+        progressId: AUTHORED_FACTS[factId]?.progressId || null,
+        description: AUTHORED_FACTS[factId]?.object || null
+      })),
       dangerClock: structuredClone(chapter.dangerClock), exits: structuredClone(chapter.exits)
     },
     sceneGoal: state.director.sceneGoal || chapter.goal,
@@ -120,6 +131,28 @@ function effectiveClockDeltas(contract, narration) {
     output.set(clock.id, value);
   }
   return output;
+}
+
+function hasMeaningfulProgress(advanced, narration, contract) {
+  const exitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
+  const clockIds = new Set(contract.dangerClocks.map((clock) => clock.id));
+  const hasMemoryFact = Array.isArray(narration?.memory?.facts) && narration.memory.facts.length > 0;
+  const relationshipChanged = narration?.effects?.relationships
+    && Object.values(narration.effects.relationships).some((value) => Number(value) !== 0);
+  return advanced.some((id) => {
+    if (id.startsWith('opening:')) return true;
+    if (exitIds.has(id)) return true;
+    if (id.startsWith('quest:')) {
+      return contract.legalQuestIds.some((questId) => id === `quest:${questId}` || id.startsWith(`quest:${questId}:`));
+    }
+    if (id.startsWith('danger:')) return [...clockIds].some((clockId) => id.startsWith(`danger:${clockId}:`));
+    if (id.startsWith('discovery:')) {
+      return Object.values(AUTHORED_FACTS).some((fact) => fact.progressId === id) || hasMemoryFact;
+    }
+    if (id.startsWith('fact:')) return hasMemoryFact;
+    if (id.startsWith('relationship:')) return relationshipChanged;
+    return id.startsWith('battle:');
+  }) || Boolean(narration?.effects?.location);
 }
 
 function fingerprintFor(narration) {
@@ -219,7 +252,15 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
       const generated = Array.isArray(narration.entities) && narration.entities.some((entity) => cleanText(entity?.name, 40) === cleanText(block.name, 40));
       if (!actor && !generated) errors.push(`未登记角色不能发言：${cleanText(block.name, 40)}。`);
       if (actor?.status === 'dead') errors.push(`死亡角色不能发言：${actor.name}。`);
-      if (actor && !Object.hasOwn(factsByActor, actor.id)) errors.push(`角色 ${actor.id} 的对白缺少知识来源引用声明。`);
+      if (!Array.isArray(block.factIds)) errors.push(`角色 ${actor?.id || cleanText(block.name, 40)} 的对白缺少逐段事实引用。`);
+      const blockFactIds = Array.isArray(block.factIds) ? block.factIds.map((id) => cleanId(id)).filter(Boolean) : [];
+      if (actor && blockFactIds.some((id) => !actor.knownFactIds.includes(id))) {
+        errors.push(`角色 ${actor.id} 使用了知识边界之外的事实。`);
+      }
+      if (actor && /(?:知道|看见|发现|听说|听见|记得|真相|真名|其实|昨夜|秘密|曾经|来自|位于)/u.test(block.text)
+        && !blockFactIds.length) {
+        errors.push(`角色 ${actor.id} 的事实性对白缺少知识来源引用。`);
+      }
     }
   }
   const allText = blocks.map((block) => cleanText(block?.text, 12_000)).join('');
@@ -242,12 +283,14 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   }
   const chapterExitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
   const advancesChapter = advanced.some((id) => chapterExitIds.has(id));
-  if (contract.consecutiveIdleTurns >= contract.idleLimit && contract.chapter.exits.length && !advancesChapter) {
-    errors.push('连续支线回合已达上限，本回合必须推进当前主线章节。');
+  if (contract.consecutiveIdleTurns >= contract.idleLimit && contract.chapter.exits.length
+    && !hasMeaningfulProgress(advanced, narration, contract)) {
+    errors.push('连续空转已达上限，本回合必须推动主线压力、线索、任务或有效支路。');
   }
   if (advancesChapter) {
     const knownFacts = new Set(contract.facts.map((fact) => fact.id));
-    const missingFacts = contract.chapter.requiredFacts.filter((id) => !knownFacts.has(id));
+    const missingFacts = contract.chapter.requiredFacts.filter((id) => !knownFacts.has(id)
+      && (!AUTHORED_FACTS[id]?.progressId || !advanced.includes(AUTHORED_FACTS[id].progressId)));
     if (missingFacts.length) errors.push(`章节前置事实尚未满足：${missingFacts.join('、')}。`);
   }
   const legalClockIds = new Set(contract.dangerClocks.map((clock) => clock.id));
@@ -311,6 +354,14 @@ export function commitValidatedWorldTurn(source, contract, narration) {
   state.story.period = periodForMinute(state.story.minuteOfDay);
 
   const progress = narration.progress || {};
+  const advanced = Array.isArray(progress.advanced) ? progress.advanced.map((id) => cleanId(id)).filter(Boolean) : [];
+  for (const [factId, fact] of Object.entries(AUTHORED_FACTS)) {
+    if (!advanced.includes(fact.progressId) || state.memory.facts.some((entry) => entry.id === factId)) continue;
+    state.memory.facts.push({
+      id: factId, subjectId: fact.subjectId, predicate: fact.predicate, object: fact.object,
+      sourceTurnId: contract.turnId, createdAtTurn: state.memory.turnCount + 1, locked: true
+    });
+  }
   const aftermath = [];
   for (const clock of contract.dangerClocks) {
     const delta = effectiveClockDeltas(contract, narration).get(clock.id) || 0;
@@ -331,9 +382,10 @@ export function commitValidatedWorldTurn(source, contract, narration) {
   state.director.recentFingerprints = [...state.director.recentFingerprints, validation.fingerprint].slice(-8);
 
   const chapter = CHAPTERS.find((candidate) => candidate.id === contract.chapter.id) || currentChapter(state);
-  const advanced = Array.isArray(progress.advanced) ? progress.advanced : [];
   const exit = chapter.exits.find((candidate) => advanced.includes(candidate.progressId));
-  state.director.consecutiveIdleTurns = exit ? 0 : clamp(state.director.consecutiveIdleTurns + 1, 0, 10);
+  state.director.consecutiveIdleTurns = hasMeaningfulProgress(advanced, narration, contract)
+    ? 0
+    : clamp(state.director.consecutiveIdleTurns + 1, 0, 10);
   if (exit) {
     const next = CHAPTERS.find((candidate) => candidate.id === exit.nextChapterId);
     if (next) {

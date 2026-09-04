@@ -141,6 +141,34 @@ function safePending(value) {
   return output;
 }
 
+function safeTransactionJournal(value) {
+  if (!isRecord(value) || value.type !== 'ai-world-turn' || !isRecord(value.turn)) return null;
+  const id = cleanId(value.turn.id, 100);
+  const blocks = Array.isArray(value.turn.blocks) ? value.turn.blocks.slice(0, 8).map((block) => {
+    if (!isRecord(block) || !['narr', 'dlg'].includes(block.type)) return null;
+    const text = cleanText(block.text, 12_000);
+    if (!text) return null;
+    return block.type === 'dlg'
+      ? { type: 'dlg', name: cleanText(block.name, 40) || '无名之人', text }
+      : { type: 'narr', text };
+  }).filter(Boolean) : [];
+  if (!id || !blocks.length) return null;
+  return {
+    type: 'ai-world-turn',
+    turn: {
+      id,
+      kind: 'world',
+      userText: cleanText(value.turn.userText, 2_000),
+      provider: cleanText(value.turn.provider, 40),
+      model: cleanText(value.turn.model, 100),
+      blocks,
+      suggestions: stringList(value.turn.suggestions, 5, 160),
+      fingerprint: cleanText(value.turn.fingerprint, 1_000),
+      createdAt: cleanText(value.turn.createdAt, 40)
+    }
+  };
+}
+
 function safeBattle(value) {
   if (!isRecord(value)) return null;
   const enemyId = cleanId(value.enemyId, 80);
@@ -195,6 +223,7 @@ export function createGameState(name = '顾长生', mode = 'local', idFactory = 
     memory: { chapterSummaries: {}, facts: [], entities: {}, turnCount: 0 },
     battle: null,
     pending: safeMode === 'local' ? { type: 'intro-escape' } : null,
+    transactionJournal: null,
     stats: { turns: 0, battlesWon: 0, faceCount: 0, pillsCrafted: 0 },
     settings: { difficulty: 'normal' },
     updatedAt: new Date().toISOString()
@@ -311,6 +340,7 @@ function normalizeV3(input, expectedMode) {
   };
   base.battle = safeBattle(input.battle);
   base.pending = safePending(input.pending);
+  base.transactionJournal = mode === 'ai' ? safeTransactionJournal(input.transactionJournal) : null;
   base.stats = {
     turns: Math.floor(clamp(stats.turns, 0, 999999)),
     battlesWon: Math.floor(clamp(stats.battlesWon, 0, 999999)),

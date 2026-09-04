@@ -318,7 +318,9 @@ async function ensureLocalOpening() {
 }
 
 async function enterGame(nextState, { skipOpening = false } = {}) {
-  state = nextState;
+  state = nextState.mode === 'ai'
+    ? await storage.recoverPendingTurn('ai', nextState, transcriptStore)
+    : nextState;
   mode = state.mode;
   channel = 'world';
   clearRetry();
@@ -552,7 +554,13 @@ function renderSaveDialog() {
     actions.append(save);
     if (meta) {
       const load = node('button', '', '读取');
-      load.addEventListener('click', async () => { const loaded = storage.loadSlot(mode, slot); closeAllLayers(); await enterGame(loaded, { skipOpening: true }); });
+      load.addEventListener('click', async () => {
+        try {
+          const loaded = storage.activateSlotAsAuto(mode, slot);
+          closeAllLayers();
+          await enterGame(loaded, { skipOpening: true });
+        } catch (error) { showToast(`读取失败：${error.message}`); }
+      });
       const remove = node('button', 'danger', '删除');
       remove.addEventListener('click', async () => {
         if (globalThis.confirm?.(`删除命簿 ${number}？自动存档不会删除。`)) {

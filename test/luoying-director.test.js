@@ -47,6 +47,7 @@ test('scene contracts carry a goal danger clock and NPC knowledge', () => {
   const contract = createSceneContract(state, '我问林小满昨夜看见了什么', 'turn-8');
   assert.equal(contract.sceneGoal, state.director.sceneGoal);
   assert.ok(contract.dangerClocks.length > 0);
+  assert.equal(contract.chapter.requiredDiscoveries[0].progressId, 'discovery:forest-footprints');
   assert.deepEqual(contract.actors.find((actor) => actor.id === 'npc:lin-xiaoman').knownFactIds, ['fact:forest-footprints']);
   assert.equal(Object.isFrozen(contract), true);
   assert.equal(Object.isFrozen(contract.actors), true);
@@ -128,7 +129,7 @@ test('repair messages contain validation errors and never invent replacement sto
   assert.doesNotMatch(messages.map((message) => message.content).join(''), /你走进|忽然出现/);
 });
 
-test('two side-progress turns force the next response back onto an authored chapter exit', () => {
+test('soft rails reject empty wandering but allow meaningful side routes and chapter exits', () => {
   const state = seededAiState();
   state.director.consecutiveIdleTurns = 2;
   const contract = createSceneContract(state, '继续调查附近支线', 'turn-rail');
@@ -137,11 +138,34 @@ test('two side-progress turns force the next response back onto an authored chap
   assert.equal(rejected.ok, false);
   assert.ok(rejected.errors.some((error) => /主线|章节/.test(error)));
 
+  const sideRoute = {
+    ...wandering,
+    progress: { ...wandering.progress, advanced: ['quest:herb-basket:clue'] }
+  };
+  assert.equal(validateAiWorldTurn(state, contract, sideRoute, []).ok, true);
+
   const advancing = {
     ...wandering,
     progress: { ...wandering.progress, advanced: ['chapter:act2-forest-signs:complete'] }
   };
   assert.equal(validateAiWorldTurn(state, contract, advancing, []).ok, true);
+});
+
+test('authored discovery progress creates the stable fact required by a chapter exit', () => {
+  const state = seededAiState();
+  state.memory.facts = [];
+  state.memory.entities['npc:lin-xiaoman'].knownFactIds = [];
+  const contract = createSceneContract(state, '查清足迹并把证据交给宗门', 'turn-authored-fact');
+  const narration = {
+    ...narrationWithText('泥痕中的魔砂证明这串足迹来自魔修，证据随即送往戒律堂。'),
+    progress: {
+      advanced: ['discovery:forest-footprints', 'chapter:act2-forest-signs:complete'],
+      consequences: ['戒律堂开始封锁后山'], openLoops: [], dangerClocks: { demonicTrail: 1 }
+    }
+  };
+  const next = commitValidatedWorldTurn(state, contract, narration);
+  assert.equal(next.director.chapterId, 'act2-sect-undercurrent');
+  assert.ok(next.memory.facts.some((fact) => fact.id === 'fact:forest-footprints'));
 });
 
 test('danger clocks enforce their authored limit and create a deterministic aftermath', () => {
@@ -180,4 +204,17 @@ test('dead actors cannot re-enter active narration outside dialogue', () => {
   const result = validateAiWorldTurn(state, contract, narration, []);
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => /死亡角色/.test(error)));
+});
+
+test('an NPC cannot state forbidden knowledge with an empty block citation', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '询问魔尊身份', 'turn-empty-citation');
+  const narration = {
+    ...narrationWithText('林间风声骤停。'),
+    blocks: [{ type: 'dlg', name: '林小满', text: '我知道魔尊真正的名字。', factIds: [] }],
+    usedFactIdsByActor: { 'npc:lin-xiaoman': [] }
+  };
+  const result = validateAiWorldTurn(state, contract, narration, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /事实|知识来源|引用/.test(error)));
 });
