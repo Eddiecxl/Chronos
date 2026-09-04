@@ -1,49 +1,76 @@
-import { migrateGameState, validateImportedState } from './game-state.js';
+import { GAME_MODES, migrateGameState, validateImportedState } from './game-state.js';
 
-const AUTO_KEY = 'luoying_save_v2';
-const LEGACY_AUTO_KEY = 'luoying_save';
-const slotKey = (slot) => `luoying_${slot}_data`;
-const slotMetaKey = (slot) => `luoying_${slot}_meta`;
+const LEGACY_KEYS = ['luoying_save_v2', 'luoying_save'];
 const validSlot = (slot) => /^slot[1-3]$/.test(slot);
+const assertMode = (mode) => {
+  if (!GAME_MODES.includes(mode)) throw new Error('游戏模式无效。');
+  return mode;
+};
+const autoKey = (mode) => `luoying_v3_${mode}_auto`;
+const slotKey = (mode, slot) => `luoying_v3_${mode}_${slot}`;
+const slotMetaKey = (mode, slot) => `${slotKey(mode, slot)}_meta`;
 
-function serializeState(state) {
+function assertSlot(slot) {
+  if (!validSlot(slot)) throw new Error('存档槽位无效。');
+  return slot;
+}
+
+function serializeState(mode, state) {
   const clean = migrateGameState({
     ...state,
     battle: null,
     pending: state.pending ?? null,
     updatedAt: new Date().toISOString()
-  });
+  }, mode);
   return JSON.stringify(clean);
 }
 
 export function createStorage(storage = globalThis.localStorage) {
   if (!storage) throw new Error('当前环境不支持本地存档。');
 
-  const read = (key) => {
+  const read = (key, mode) => {
     const raw = storage.getItem(key);
     if (!raw) return null;
-    try { return validateImportedState(raw); }
+    try { return validateImportedState(raw, mode); }
     catch { return null; }
   };
 
+  const readLegacyRaw = () => {
+    for (const key of LEGACY_KEYS) {
+      const raw = storage.getItem(key);
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw);
+        validateImportedState(parsed, 'local');
+        return { key, raw, parsed };
+      } catch { /* try the older key */ }
+    }
+    return null;
+  };
+
   return {
-    loadAuto() {
-      return read(AUTO_KEY) || read(LEGACY_AUTO_KEY);
+    loadAuto(mode) {
+      assertMode(mode);
+      return read(autoKey(mode), mode);
     },
-    saveAuto(state) {
-      storage.setItem(AUTO_KEY, serializeState(state));
-      return read(AUTO_KEY);
+    saveAuto(mode, state) {
+      assertMode(mode);
+      storage.setItem(autoKey(mode), serializeState(mode, state));
+      return read(autoKey(mode), mode);
     },
-    loadSlot(slot) {
-      if (!validSlot(slot)) throw new Error('存档槽位无效。');
-      return read(slotKey(slot));
+    loadSlot(mode, slot) {
+      assertMode(mode);
+      assertSlot(slot);
+      return read(slotKey(mode, slot), mode);
     },
-    saveSlot(slot, state) {
-      if (!validSlot(slot)) throw new Error('存档槽位无效。');
-      const raw = serializeState(state);
-      storage.setItem(slotKey(slot), raw);
+    saveSlot(mode, slot, state) {
+      assertMode(mode);
+      assertSlot(slot);
+      const raw = serializeState(mode, state);
+      storage.setItem(slotKey(mode, slot), raw);
       const clean = JSON.parse(raw);
-      storage.setItem(slotMetaKey(slot), JSON.stringify({
+      storage.setItem(slotMetaKey(mode, slot), JSON.stringify({
+        mode,
         name: clean.player.name,
         realm: clean.player.realm,
         act: clean.story.act,
@@ -53,24 +80,33 @@ export function createStorage(storage = globalThis.localStorage) {
       }));
       return clean;
     },
-    deleteSlot(slot) {
-      if (!validSlot(slot)) throw new Error('存档槽位无效。');
-      storage.removeItem(slotKey(slot));
-      storage.removeItem(slotMetaKey(slot));
+    deleteSlot(mode, slot) {
+      assertMode(mode);
+      assertSlot(slot);
+      storage.removeItem(slotKey(mode, slot));
+      storage.removeItem(slotMetaKey(mode, slot));
     },
-    getSlotMeta(slot) {
-      if (!validSlot(slot)) throw new Error('存档槽位无效。');
-      try { return JSON.parse(storage.getItem(slotMetaKey(slot))) || null; }
+    getSlotMeta(mode, slot) {
+      assertMode(mode);
+      assertSlot(slot);
+      try {
+        const meta = JSON.parse(storage.getItem(slotMetaKey(mode, slot)) || 'null');
+        return meta?.mode === mode ? meta : null;
+      } catch { return null; }
+    },
+    findLegacySave() {
+      const entry = readLegacyRaw();
+      if (!entry) return null;
+      try { return validateImportedState(entry.parsed, 'local'); }
       catch { return null; }
     },
-    exportState(state) {
-      return new Blob([serializeState(state)], { type: 'application/json;charset=utf-8' });
-    },
-    async importState(source) {
-      const text = typeof source === 'string' ? source : await source.text();
-      const clean = validateImportedState(text);
-      storage.setItem(AUTO_KEY, serializeState(clean));
-      return clean;
+    importLegacy(mode) {
+      assertMode(mode);
+      const entry = readLegacyRaw();
+      if (!entry) throw new Error('没有找到可迁移的旧存档。');
+      const clean = validateImportedState(entry.parsed, mode);
+      storage.setItem(autoKey(mode), serializeState(mode, clean));
+      return read(autoKey(mode), mode);
     }
   };
 }
