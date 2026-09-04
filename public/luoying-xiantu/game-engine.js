@@ -516,6 +516,9 @@ export function applyValidatedEffects(source, effects = {}) {
   if (effects.addItems && typeof effects.addItems === 'object') {
     for (const [name, amount] of Object.entries(effects.addItems)) if (ITEMS[name]) addItem(state, name, clamp(amount, 0, 5));
   }
+  if (Array.isArray(effects.addQuests)) {
+    for (const id of effects.addQuests.slice(0, 5)) if (QUESTS[id]) addQuest(state, id);
+  }
   if (typeof effects.location === 'string' && LOCATIONS[effects.location]) {
     const target = LOCATIONS[effects.location];
     if (state.story.act >= target.act && state.player.realm >= target.realm) {
