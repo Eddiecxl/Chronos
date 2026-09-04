@@ -224,7 +224,7 @@ function MobileNav({ page, setPage, unreadCount = 0 }) {
       <button tabIndex={navTabIndex} className={page === 'planner' ? 'active' : ''} onClick={() => setPage('planner')}><span>Plan</span><small>Planner</small></button>
       <button tabIndex={navTabIndex} className={page === 'reader' ? 'active' : ''} onClick={() => setPage('reader')}><span>Read</span><small>Novel</small></button>
       <button tabIndex={navTabIndex} className={page === 'trainer' ? 'active' : ''} onClick={() => setPage('trainer')}><span>Train</span><small>PL-900</small></button>
-      <button tabIndex={navTabIndex} className={page === 'game' ? 'active' : ''} onClick={() => setPage('game')}><span>Play</span><small>Rift</small></button>
+      <button tabIndex={navTabIndex} className={page === 'game' ? 'active' : ''} onClick={() => setPage('game')}><span>Play</span><small>落樱仙途</small></button>
       <button tabIndex={navTabIndex} className={page === 'lobby' || page === 'room' ? 'active' : ''} onClick={() => setPage('lobby')}><span>Circle {unreadCount > 0 && <b>{unreadCount}</b>}</span><small>Lobby</small></button>
     </nav>
     {!visible && <button className="mobile-nav-reveal" onClick={reveal} aria-label="Show page navigation"><span/></button>}
