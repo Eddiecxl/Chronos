@@ -30,6 +30,7 @@ test('browser controller uses choice dispatch and text-only story rendering', as
   assert.match(script, /\.textContent\s*=/);
   assert.doesNotMatch(script, /dispatchLocalAction/);
   assert.doesNotMatch(script, /storyLog\.innerHTML/);
+  assert.match(script, /modelInput\.disabled\s*=\s*siteMode/);
 });
 
 test('responsive styles retain reachable controls and reduced motion support', async () => {

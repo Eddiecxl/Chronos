@@ -127,3 +127,57 @@ test('repair messages contain validation errors and never invent replacement sto
   assert.match(messages[0].content, /缺少进展/);
   assert.doesNotMatch(messages.map((message) => message.content).join(''), /你走进|忽然出现/);
 });
+
+test('two side-progress turns force the next response back onto an authored chapter exit', () => {
+  const state = seededAiState();
+  state.director.consecutiveIdleTurns = 2;
+  const contract = createSceneContract(state, '继续调查附近支线', 'turn-rail');
+  const wandering = narrationWithText('树下又找到一枚无关紧要的旧铜钱。');
+  const rejected = validateAiWorldTurn(state, contract, wandering, []);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.errors.some((error) => /主线|章节/.test(error)));
+
+  const advancing = {
+    ...wandering,
+    progress: { ...wandering.progress, advanced: ['chapter:act2-forest-signs:complete'] }
+  };
+  assert.equal(validateAiWorldTurn(state, contract, advancing, []).ok, true);
+});
+
+test('danger clocks enforce their authored limit and create a deterministic aftermath', () => {
+  const state = seededAiState();
+  state.director.dangerClocks.demonicTrail = 5;
+  const contract = createSceneContract(state, '追踪魔气源头', 'turn-danger');
+  const narration = {
+    ...narrationWithText('魔气骤然冲破林间阵眼，巡山弟子被迫后撤。'),
+    progress: {
+      advanced: ['danger:demonicTrail:erupts'], consequences: ['阵眼破裂，魔修开始转移'],
+      openLoops: [], dangerClocks: { demonicTrail: 1 }
+    }
+  };
+  const next = commitValidatedWorldTurn(state, contract, narration);
+  assert.equal(next.director.dangerClocks.demonicTrail, 0);
+  assert.ok(next.director.openLoops.some((loop) => loop.startsWith('danger:demonicTrail:aftermath:')));
+});
+
+test('every known NPC dialogue declares its fact citations even when none are used', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '询问林小满', 'turn-citations');
+  const narration = {
+    ...narrationWithText('林小满压低声音。'),
+    blocks: [{ type: 'dlg', name: '林小满', text: '这件事得从昨夜说起。' }]
+  };
+  const result = validateAiWorldTurn(state, contract, narration, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /知识来源|引用/.test(error)));
+});
+
+test('dead actors cannot re-enter active narration outside dialogue', () => {
+  const state = seededAiState();
+  state.memory.entities['npc:lin-xiaoman'].status = 'dead';
+  const contract = createSceneContract(state, '查看林间', 'turn-dead-narration');
+  const narration = narrationWithText('死去的林小满忽然出现，推开阵门并向众人招手。');
+  const result = validateAiWorldTurn(state, contract, narration, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /死亡角色/.test(error)));
+});

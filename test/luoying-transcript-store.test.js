@@ -39,3 +39,11 @@ test('deleteJourney removes only the selected archive', async () => {
   assert.deepEqual(await store.allTurns('one'), []);
   assert.equal((await store.allTurns('two')).length, 1);
 });
+
+test('deleteTurn compensates a failed cross-store world commit', async () => {
+  const store = createTranscriptStore({ memory: new Map() });
+  await store.appendTurn('journey', { id: 'keep', kind: 'world', blocks: [{ type: 'narr', text: '保留' }] });
+  await store.appendTurn('journey', { id: 'rollback', kind: 'world', blocks: [{ type: 'narr', text: '撤回' }] });
+  await store.deleteTurn('journey', 'rollback');
+  assert.deepEqual((await store.allTurns('journey')).map((turn) => turn.id), ['keep']);
+});

@@ -10,7 +10,6 @@ export const PROVIDERS = {
     label: 'Mistral', model: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1',
     credentialMode: 'site', recommended: true, tip: '稳定、节奏明快；可用网站额度或自己的 Mistral Key。'
   },
-  puter: { label: 'Puter.js', model: 'gpt-5-nano', credentialMode: 'none', tip: '免填 Key，首次使用可能要求登录 Puter。' },
   gemini: {
     label: 'Google Gemini', model: 'gemini-3.5-flash', credentialMode: 'site', advanced: true,
     tip: '保留的高级选项；支持网站额度或个人 Google AI Studio Key。'
@@ -172,7 +171,7 @@ function normalizeMessages(messages) {
   if (!Array.isArray(messages) || !messages.length) throw new Error('AI 请求缺少剧情消息。');
   const normalized = messages.slice(-16).map((message) => ({
     role: allowedRole(message?.role),
-    content: cleanText(message?.content, 18_000)
+    content: cleanText(message?.content, 5_800)
   })).filter((message) => message.content);
   if (!normalized.length) throw new Error('AI 请求缺少有效消息。');
   return normalized;
@@ -235,27 +234,7 @@ async function requestJson(fetchImpl, url, options, attempts = 2) {
   throw lastError || new Error('AI 请求失败。');
 }
 
-async function defaultPuterLoader() {
-  if (globalThis.puter) return globalThis.puter;
-  if (typeof document === 'undefined') throw new Error('当前环境不能加载 Puter。');
-  await new Promise((resolve, reject) => {
-    const existing = document.querySelector('script[data-luoying-puter]');
-    if (existing) {
-      existing.addEventListener('load', resolve, { once: true });
-      existing.addEventListener('error', reject, { once: true });
-      return;
-    }
-    const script = document.createElement('script');
-    script.src = 'https://js.puter.com/v2/';
-    script.dataset.luoyingPuter = 'true';
-    script.onload = resolve;
-    script.onerror = () => reject(new Error('Puter 脚本加载失败。'));
-    document.head.append(script);
-  });
-  return globalThis.puter;
-}
-
-export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, puterLoader = defaultPuterLoader } = {}) {
+export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage } = {}) {
   if (!fetchImpl) throw new Error('当前环境不支持网络请求。');
   const client = {
     loadSettings() {
@@ -273,16 +252,6 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
       const messages = normalizeMessages(context.messages);
       const requestType = cleanText(context.requestType || 'world', 20);
       const transactionId = cleanText(context.transactionId, 100);
-
-      if (settings.provider === 'puter') {
-        const puter = await puterLoader();
-        if (!puter?.ai?.chat) throw new Error('Puter AI 尚未就绪。');
-        const result = await puter.ai.chat(messages, { model: settings.model || PROVIDERS.puter.model });
-        const content = typeof result === 'string' ? result : result?.message?.content ?? result?.text ?? result?.content;
-        if (Array.isArray(content)) return content.map((part) => part?.text || '').join('');
-        if (typeof content !== 'string' || !content.trim()) throw new Error('Puter 返回为空。');
-        return content;
-      }
 
       if (settings.credentialMode === 'site' && ['gemini', 'groq', 'mistral'].includes(settings.provider)) {
         const token = storage?.getItem(SESSION_KEY) || '';

@@ -112,6 +112,23 @@ test('successful turns persist transcript facts and generated entities only afte
   assert.equal(result.state.memory.entities['generated:npc:zhao-scout'].name, '赵府斥候');
 });
 
+test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {
+  const transcriptStore = createTranscriptStore({ memory: new Map() });
+  const state = seededAiState();
+  const before = JSON.stringify(state);
+  const runner = createAiTurnRunner({
+    aiClient: { narrate: async () => validWorldResponse() },
+    transcriptStore,
+    stateStore: { saveAuto: () => { throw new Error('quota full'); } },
+    idFactory: () => 'tx-storage-failure'
+  });
+  const result = await runner.runWorld({ state, input: '查看门缝', settings: { provider: 'groq' } });
+  assert.equal(result.ok, false);
+  assert.equal(JSON.stringify(state), before);
+  assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
+  assert.match(result.error, /quota full/);
+});
+
 test('provider switching changes only the next request and keeps one AI journey', async () => {
   const providers = [];
   let counter = 0;
@@ -139,4 +156,31 @@ test('model trials return diagnostics without accepting game state', async () =>
   assert.equal(result.progressPassed, true);
   assert.equal(typeof result.repetitionScore, 'number');
   assert.equal(result.latencyMs, 0);
+});
+
+test('large histories and memories are compacted below the site proxy message limit', async () => {
+  const state = seededAiState();
+  state.memory.chapterSummaries = Array.from({ length: 20 }, (_, index) => ({
+    chapterId: `chapter-${index}`, summary: `第${index}章${'旧事'.repeat(500)}`
+  }));
+  state.memory.facts = Array.from({ length: 50 }, (_, index) => ({
+    id: `fact:bulk-${index}`, subjectId: 'world:bulk', predicate: 'remembers',
+    object: `事实${index}${'细节'.repeat(100)}`, sourceTurnId: 'seed', createdAtTurn: index, locked: false
+  }));
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  for (let index = 0; index < 10; index += 1) {
+    await transcripts.appendTurn(state.journeyId, {
+      id: `bulk-${index}`, kind: 'world', userText: `行动${index}${'很长'.repeat(300)}`,
+      blocks: [{ type: 'narr', text: `历史${index}${'往事'.repeat(3_000)}` }], suggestions: ['继续调查']
+    });
+  }
+  let captured;
+  const runner = createAiTurnRunner({
+    aiClient: { narrate: async (_settings, context) => { captured = context.messages; return validWorldResponse(); } },
+    transcriptStore: transcripts,
+    idFactory: () => 'tx-bounded'
+  });
+  const result = await runner.runWorld({ state, input: '查看门缝', settings: { provider: 'groq' } });
+  assert.equal(result.ok, true);
+  assert.ok(captured.every((message) => message.content.length <= 6_000));
 });

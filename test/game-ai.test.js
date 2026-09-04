@@ -93,6 +93,20 @@ test('transient upstream responses receive exactly one retry', async () => {
   assert.equal(calls, 2);
 });
 
+test('upstream timeout remains active while the response body is being read', async () => {
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' }, timeoutMs: 5,
+    fetchImpl: async (_url, options) => ({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
+      })
+    })
+  });
+  await assert.rejects(service.generate('player', validRequest('groq')), (error) => error.code === 'AI_TIMEOUT');
+});
+
 test('per-account rolling minute limits do not affect another account', async () => {
   const service = createGameAiService({
     env: { GROQ_API_KEY: 'secret' }, now: () => 1000,

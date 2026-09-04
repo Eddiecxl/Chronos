@@ -190,6 +190,6 @@ export function selectRelevantMemory(source, context = {}) {
     .slice(0, 12)
     .map((id) => [id, state.memory.entities[id]]));
   const packet = { chapterSummaries, facts, entities };
-  while (JSON.stringify(packet).length >= 9000 && packet.facts.length) packet.facts.pop();
+  while (JSON.stringify(packet).length >= 2200 && packet.facts.length) packet.facts.pop();
   return packet;
 }

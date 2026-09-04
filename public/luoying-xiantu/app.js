@@ -35,7 +35,7 @@ const LOCAL_OPENING = [
 const storage = createStorage();
 const transcriptStore = createTranscriptStore();
 const aiClient = createAiClient();
-const aiRunner = createAiTurnRunner({ aiClient, transcriptStore });
+const aiRunner = createAiTurnRunner({ aiClient, transcriptStore, stateStore: storage });
 
 let state = null;
 let mode = null;
@@ -227,7 +227,8 @@ async function runLocalChoice(choiceId, label) {
 
 function showRetry(result, type) {
   retryContext = { type, ...result.retry };
-  dom.retryMessage.textContent = `${result.error}。世界仍停在行动前；可重试、换模型或修改输入。`;
+  const message = String(result.error || 'AI 回合失败').replace(/[。.!！]+$/u, '');
+  dom.retryMessage.textContent = `${message}。世界仍停在行动前；可重试、换模型或修改输入。`;
   dom.retryPanel.hidden = false;
 }
 
@@ -253,7 +254,6 @@ async function runAiOpening(transactionId) {
     return;
   }
   state = result.state;
-  storage.saveAuto('ai', state);
   for (const block of result.blocks) appendStoryBlock(block);
   renderAiSuggestions(result.suggestions);
   renderTopbar();
@@ -272,7 +272,6 @@ async function runAiWorld(input, transactionId) {
     return;
   }
   state = result.state;
-  storage.saveAuto('ai', state);
   appendStoryBlock({ type: 'player', text: input });
   for (const block of result.blocks) appendStoryBlock(block);
   dom.playerInput.value = '';
@@ -539,16 +538,28 @@ function renderSaveDialog() {
       : '这一页尚未落笔。'));
     const actions = node('div', 'slot-actions');
     const save = node('button', '', meta ? '覆盖保存' : '保存');
-    save.addEventListener('click', () => { storage.saveSlot(mode, slot, state); renderSaveDialog(); showToast(`已保存到命簿 ${number}`); });
+    save.addEventListener('click', async () => {
+      save.disabled = true;
+      try {
+        await storage.saveJourneySlot(mode, slot, state, transcriptStore);
+        renderSaveDialog();
+        showToast(`已保存到命簿 ${number}`);
+      } catch (error) {
+        save.disabled = false;
+        showToast(`保存失败：${error.message}`);
+      }
+    });
     actions.append(save);
     if (meta) {
       const load = node('button', '', '读取');
       load.addEventListener('click', async () => { const loaded = storage.loadSlot(mode, slot); closeAllLayers(); await enterGame(loaded, { skipOpening: true }); });
       const remove = node('button', 'danger', '删除');
-      remove.addEventListener('click', () => {
-        if (globalThis.confirm?.(`删除命簿 ${number}？自动存档和完整旅程记录不会删除。`)) {
-          storage.deleteSlot(mode, slot);
-          renderSaveDialog();
+      remove.addEventListener('click', async () => {
+        if (globalThis.confirm?.(`删除命簿 ${number}？自动存档不会删除。`)) {
+          try {
+            await storage.deleteJourneySlot(mode, slot, transcriptStore);
+            renderSaveDialog();
+          } catch (error) { showToast(`删除失败：${error.message}`); }
         }
       });
       actions.append(load, remove);
@@ -569,8 +580,6 @@ function populateProviderSelect(select, selected) {
   select.replaceChildren();
   const recommended = node('optgroup');
   recommended.label = '推荐';
-  const keyless = node('optgroup');
-  keyless.label = '免密入口';
   const advanced = node('optgroup');
   advanced.label = '高级 / 测试';
   for (const [id, provider] of Object.entries(PROVIDERS)) {
@@ -578,10 +587,9 @@ function populateProviderSelect(select, selected) {
     option.value = id;
     option.selected = id === selected;
     if (provider.recommended) recommended.append(option);
-    else if (provider.credentialMode === 'none') keyless.append(option);
     else advanced.append(option);
   }
-  select.append(recommended, keyless, advanced);
+  select.append(recommended, advanced);
 }
 
 function syncAiFields(resetModel = false) {
@@ -595,8 +603,11 @@ function syncAiFields(resetModel = false) {
   dom.keyField.hidden = none || dom.credentialSelect.value !== 'personal';
   dom.baseField.hidden = id !== 'custom';
   if (resetModel) dom.modelInput.value = provider.model;
+  const siteMode = siteCapable && dom.credentialSelect.value === 'site';
+  dom.modelInput.disabled = siteMode;
+  dom.modelInput.title = siteMode ? '网站模式由 Render 环境变量决定模型；切换到个人 Key 后可自选模型。' : '';
   dom.baseUrlInput.value = provider.baseUrl || '';
-  dom.providerTip.textContent = provider.tip;
+  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式的模型由部署配置统一决定。' : ''}`;
 }
 
 function openAiDialog() {
@@ -627,7 +638,7 @@ function saveAiSettings() {
   runtimeKey = collected.key;
   aiSettings = aiClient.saveSettings(collected);
   renderTopbar();
-  dom.connectionStatus.textContent = '已保存。下一次 AI 请求立即使用这个模型；当前旅程与记忆保持不变。';
+  dom.connectionStatus.textContent = '已保存。下一次 AI 请求立即使用这个提供商；当前旅程与记忆保持不变。';
   showToast('AI 模型已切换');
 }
 

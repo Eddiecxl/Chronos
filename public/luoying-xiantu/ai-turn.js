@@ -16,7 +16,8 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 3. 每回合必须产生新信息、明确后果或目标进展；不得复述、拖延或绕圈。
 4. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。
 5. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
-6. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
+6. 每个已有 NPC 的对白都必须在 usedFactIdsByActor 以角色 ID 声明引用；没有引用时也要写空数组。
+7. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
 {"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白"}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"suggestions":["行动一","行动二"],"timeCost":"instant|brief|scene|long"}`;
 
@@ -24,13 +25,42 @@ const cleanText = (value, max = 2_000) => String(value ?? '').replace(/[\u0000-\
 const defaultId = () => globalThis.crypto?.randomUUID?.() || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 function recentForPrompt(turns) {
-  return turns.slice(-10).map((turn) => ({
-    id: turn.id,
+  return turns.slice(-6).map((turn) => ({
+    id: cleanText(turn.id, 100),
     kind: turn.kind,
-    userText: turn.userText,
-    blocks: turn.blocks,
-    suggestions: turn.suggestions
+    userText: cleanText(turn.userText, 300),
+    blocks: Array.isArray(turn.blocks) ? turn.blocks.slice(-4).map((block) => ({
+      type: block.type,
+      ...(block.name ? { name: cleanText(block.name, 40) } : {}),
+      text: cleanText(block.text, 500)
+    })) : [],
+    suggestions: Array.isArray(turn.suggestions) ? turn.suggestions.slice(0, 3).map((value) => cleanText(value, 80)) : []
   }));
+}
+
+function compactContract(contract) {
+  return {
+    turnId: contract.turnId,
+    playerInput: contract.playerInput,
+    chapter: contract.chapter,
+    sceneGoal: contract.sceneGoal,
+    location: contract.location,
+    actors: contract.actors.slice(0, 8).map((actor) => ({
+      id: actor.id, name: actor.name, status: actor.status, location: actor.location,
+      purpose: actor.purpose, knownFactIds: actor.knownFactIds.slice(0, 12)
+    })),
+    facts: contract.facts.slice(-12),
+    dangerClocks: contract.dangerClocks,
+    openLoopIds: contract.openLoopIds.slice(-12),
+    legalItemIds: contract.legalItemIds,
+    legalLocations: contract.legalLocations,
+    legalQuestIds: contract.legalQuestIds,
+    legalRelationshipIds: contract.legalRelationshipIds,
+    effectCaps: contract.effectCaps,
+    idleLimit: contract.idleLimit,
+    consecutiveIdleTurns: contract.consecutiveIdleTurns,
+    player: contract.player
+  };
 }
 
 function buildWorldMessages(contract, memoryPacket, recentTurns, requestType) {
@@ -40,11 +70,11 @@ function buildWorldMessages(contract, memoryPacket, recentTurns, requestType) {
   return [
     {
       role: 'system',
-      content: `${WORLD_BIBLE}\n${openingRule}\n场景契约：${JSON.stringify(contract)}\n相关长期记忆：${JSON.stringify(memoryPacket)}`
+      content: cleanText(`${WORLD_BIBLE}\n${openingRule}\n场景契约：${JSON.stringify(compactContract(contract))}\n相关长期记忆：${JSON.stringify(memoryPacket)}`, 5_800)
     },
     {
       role: 'user',
-      content: `最近十个回合：${JSON.stringify(recentForPrompt(recentTurns))}\n本次玩家原话：${contract.playerInput}\n严格输出一个 JSON 对象。`
+      content: cleanText(`本次玩家原话：${contract.playerInput}\n最近六个回合：${JSON.stringify(recentForPrompt(recentTurns))}\n严格输出一个 JSON 对象。`, 5_800)
     }
   ];
 }
@@ -69,9 +99,10 @@ function repetitionScore(text) {
   return Number((1 - new Set(grams).size / Math.max(1, grams.length)).toFixed(3));
 }
 
-export function createAiTurnRunner({ aiClient, transcriptStore, now = () => Date.now(), idFactory = defaultId } = {}) {
+export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now = () => Date.now(), idFactory = defaultId } = {}) {
   if (!aiClient?.narrate) throw new Error('AI 客户端不可用。');
   if (!transcriptStore?.recentTurns || !transcriptStore?.appendTurn) throw new Error('游戏记录存储不可用。');
+  if (stateStore && (!stateStore.saveAuto || !transcriptStore.deleteTurn)) throw new Error('AI 原子存档组件不可用。');
 
   async function executeWorld({ state: source, input, settings = {}, transactionId }, requestType) {
     let contract;
@@ -108,7 +139,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, now = () => Date
         if (attempt === 0) {
           messages = [
             ...messages,
-            { role: 'assistant', content: cleanText(raw, 12_000) },
+            { role: 'assistant', content: cleanText(raw, 5_800) },
             ...buildRepairMessages(contract, narration, validation.errors)
           ];
         }
@@ -134,6 +165,15 @@ export function createAiTurnRunner({ aiClient, transcriptStore, now = () => Date
         createdAt: new Date(now()).toISOString()
       };
       await transcriptStore.appendTurn(committed.journeyId, turn);
+      if (stateStore) {
+        try {
+          if (stateStore.saveAutoIfJourney) stateStore.saveAutoIfJourney('ai', committed, state.journeyId);
+          else stateStore.saveAuto('ai', committed);
+        } catch (error) {
+          await transcriptStore.deleteTurn(committed.journeyId, turn.id);
+          throw error;
+        }
+      }
       return { ok: true, state: committed, blocks: narration.blocks, suggestions: narration.suggestions, turn };
     } catch (error) {
       return failure(error, cleanInput, txId, contract);

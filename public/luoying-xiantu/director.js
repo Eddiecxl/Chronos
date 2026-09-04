@@ -80,7 +80,8 @@ export function createSceneContract(source, input, turnId) {
     playerInput: cleanText(input, 2_000),
     chapter: {
       id: chapter.id, act: chapter.act, entry: chapter.entry,
-      requiredFacts: [...chapter.requiredFacts], optionalThreads: [...chapter.optionalThreads], exits: structuredClone(chapter.exits)
+      requiredFacts: [...chapter.requiredFacts], optionalThreads: [...chapter.optionalThreads],
+      dangerClock: structuredClone(chapter.dangerClock), exits: structuredClone(chapter.exits)
     },
     sceneGoal: state.director.sceneGoal || chapter.goal,
     location: { id: LOCATIONS[state.story.location]?.id || 'location:unknown', name: state.story.location },
@@ -97,12 +98,28 @@ export function createSceneContract(source, input, turnId) {
     effectCaps: structuredClone(EFFECT_CAPS),
     requiredProgressCategories: [...PROGRESS_PREFIXES],
     idleLimit: 2,
+    consecutiveIdleTurns: state.director.consecutiveIdleTurns,
     player: {
       realm: state.player.realm, hp: state.player.hp, maxHp: state.player.maxHp,
       qi: state.player.qi, spirit: state.player.spirit, maxSpirit: state.player.maxSpirit,
       gold: state.player.gold
     }
   });
+}
+
+function effectiveClockDeltas(contract, narration) {
+  const requested = narration?.progress?.dangerClocks && typeof narration.progress.dangerClocks === 'object'
+    ? narration.progress.dangerClocks
+    : {};
+  const output = new Map();
+  for (const clock of contract.dangerClocks) {
+    const explicit = Object.hasOwn(requested, clock.id);
+    const value = explicit
+      ? Number(requested[clock.id])
+      : narration.timeCost !== 'instant' && contract.chapter.dangerClock?.id === clock.id ? 1 : 0;
+    output.set(clock.id, value);
+  }
+  return output;
 }
 
 function fingerprintFor(narration) {
@@ -192,6 +209,9 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   const blocks = Array.isArray(narration.blocks) ? narration.blocks : [];
   if (blocks.length < 1 || blocks.length > 8) errors.push('内容块必须为 1–8 个。');
   const actorByName = new Map(contract.actors.map((actor) => [actor.name, actor]));
+  const factsByActor = narration.usedFactIdsByActor && typeof narration.usedFactIdsByActor === 'object'
+    ? narration.usedFactIdsByActor
+    : {};
   for (const block of blocks) {
     if (!block || !['narr', 'dlg', 'sys'].includes(block.type) || !cleanText(block.text, 12_000)) errors.push('存在空白或非法内容块。');
     if (block?.type === 'dlg') {
@@ -199,9 +219,16 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
       const generated = Array.isArray(narration.entities) && narration.entities.some((entity) => cleanText(entity?.name, 40) === cleanText(block.name, 40));
       if (!actor && !generated) errors.push(`未登记角色不能发言：${cleanText(block.name, 40)}。`);
       if (actor?.status === 'dead') errors.push(`死亡角色不能发言：${actor.name}。`);
+      if (actor && !Object.hasOwn(factsByActor, actor.id)) errors.push(`角色 ${actor.id} 的对白缺少知识来源引用声明。`);
     }
   }
   const allText = blocks.map((block) => cleanText(block?.text, 12_000)).join('');
+  for (const actor of contract.actors.filter((candidate) => candidate.status === 'dead')) {
+    const relevant = blocks.map((block) => cleanText(block?.text, 12_000)).filter((text) => text.includes(actor.name));
+    const active = relevant.some((text) => /(?:出现|赶来|走|跑|推|挥|攻击|招手|开口|说道|回答|起身|站起|进入|离开)/u.test(text)
+      && !/(?:回忆|遗言|画像|幻象|梦境|尸体|遗骸)/u.test(text));
+    if (active) errors.push(`死亡角色不能重新参与当前行动：${actor.name}。`);
+  }
   if (PLAYER_PUPPET_PATTERNS.some((pattern) => pattern.test(allText))) errors.push('AI 不得替玩家说话、决定关键选择或指定感受。');
 
   const suggestions = Array.isArray(narration.suggestions) ? narration.suggestions.filter((value) => cleanText(value, 160)) : [];
@@ -212,6 +239,30 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   const advanced = Array.isArray(progress.advanced) ? progress.advanced.map((id) => cleanId(id)).filter(Boolean) : [];
   if (!advanced.length || advanced.some((id) => !PROGRESS_PREFIXES.some((prefix) => id.startsWith(prefix)))) {
     errors.push('世界回合必须包含至少一项有效进展。');
+  }
+  const chapterExitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
+  const advancesChapter = advanced.some((id) => chapterExitIds.has(id));
+  if (contract.consecutiveIdleTurns >= contract.idleLimit && contract.chapter.exits.length && !advancesChapter) {
+    errors.push('连续支线回合已达上限，本回合必须推进当前主线章节。');
+  }
+  if (advancesChapter) {
+    const knownFacts = new Set(contract.facts.map((fact) => fact.id));
+    const missingFacts = contract.chapter.requiredFacts.filter((id) => !knownFacts.has(id));
+    if (missingFacts.length) errors.push(`章节前置事实尚未满足：${missingFacts.join('、')}。`);
+  }
+  const legalClockIds = new Set(contract.dangerClocks.map((clock) => clock.id));
+  for (const [id, delta] of Object.entries(progress.dangerClocks || {})) {
+    const value = Number(delta);
+    if (!legalClockIds.has(id)) errors.push(`未知危险时钟：${id}。`);
+    else if (!Number.isFinite(value) || value < 0 || value > 3) errors.push(`危险时钟 ${id} 的变化超出限制。`);
+  }
+  for (const clock of contract.dangerClocks) {
+    const delta = effectiveClockDeltas(contract, narration).get(clock.id) || 0;
+    if (clock.value + delta >= clock.limit) {
+      const eruption = advanced.some((id) => id.startsWith(`danger:${clock.id}:`));
+      const consequences = Array.isArray(progress.consequences) && progress.consequences.some((value) => cleanText(value, 160));
+      if (!eruption || !consequences) errors.push(`危险时钟 ${clock.id} 已满，必须结算爆发及其明确后果。`);
+    }
   }
   const hasEffect = narration.effects && Object.entries(narration.effects).some(([, value]) => {
     if (typeof value === 'number') return value !== 0;
@@ -224,9 +275,6 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
 
   const normalizedEffects = validateEffects(contract, narration.effects || {}, errors);
-  const factsByActor = narration.usedFactIdsByActor && typeof narration.usedFactIdsByActor === 'object'
-    ? narration.usedFactIdsByActor
-    : {};
   const actorById = new Map(contract.actors.map((actor) => [actor.id, actor]));
   for (const [actorId, factIds] of Object.entries(factsByActor)) {
     const actor = actorById.get(actorId);
@@ -263,22 +311,29 @@ export function commitValidatedWorldTurn(source, contract, narration) {
   state.story.period = periodForMinute(state.story.minuteOfDay);
 
   const progress = narration.progress || {};
-  for (const [id, delta] of Object.entries(progress.dangerClocks || {})) {
-    if (contract.dangerClocks.some((clock) => clock.id === id) && Number.isFinite(Number(delta))) {
-      state.director.dangerClocks[id] = clamp((state.director.dangerClocks[id] || 0) + Number(delta), 0, 100);
+  const aftermath = [];
+  for (const clock of contract.dangerClocks) {
+    const delta = effectiveClockDeltas(contract, narration).get(clock.id) || 0;
+    const projected = clamp((state.director.dangerClocks[clock.id] || 0) + delta, 0, clock.limit);
+    if (projected >= clock.limit) {
+      state.director.dangerClocks[clock.id] = 0;
+      aftermath.push(`danger:${clock.id}:aftermath:${state.memory.turnCount + 1}`);
+    } else {
+      state.director.dangerClocks[clock.id] = projected;
     }
   }
   const resolved = new Set(Array.isArray(progress.resolvedLoops) ? progress.resolvedLoops.map((id) => cleanId(id)) : []);
   state.director.openLoops = [...new Set([
     ...state.director.openLoops.filter((id) => !resolved.has(id)),
-    ...(Array.isArray(progress.openLoops) ? progress.openLoops.map((id) => cleanId(id)).filter(Boolean) : [])
+    ...(Array.isArray(progress.openLoops) ? progress.openLoops.map((id) => cleanId(id)).filter(Boolean) : []),
+    ...aftermath
   ])].slice(-40);
   state.director.recentFingerprints = [...state.director.recentFingerprints, validation.fingerprint].slice(-8);
-  state.director.consecutiveIdleTurns = 0;
 
-  const chapter = currentChapter(state);
+  const chapter = CHAPTERS.find((candidate) => candidate.id === contract.chapter.id) || currentChapter(state);
   const advanced = Array.isArray(progress.advanced) ? progress.advanced : [];
   const exit = chapter.exits.find((candidate) => advanced.includes(candidate.progressId));
+  state.director.consecutiveIdleTurns = exit ? 0 : clamp(state.director.consecutiveIdleTurns + 1, 0, 10);
   if (exit) {
     const next = CHAPTERS.find((candidate) => candidate.id === exit.nextChapterId);
     if (next) {
@@ -300,11 +355,11 @@ export function buildRepairMessages(contract, narration, errors = []) {
   return [
     {
       role: 'system',
-      content: `上一份 JSON 未通过游戏规则验证。只修复结构和逻辑，不得改写玩家输入，不得生成本地替代剧情。\n验证问题：\n${issueList}\n场景目标：${contract.sceneGoal}\n回合编号：${contract.turnId}`
+      content: cleanText(`上一份 JSON 未通过游戏规则验证。只修复结构和逻辑，不得改写玩家输入，不得生成本地替代剧情。\n验证问题：\n${issueList}\n场景目标：${contract.sceneGoal}\n回合编号：${contract.turnId}`, 5_800)
     },
     {
       role: 'user',
-      content: `请重新输出一个严格 JSON 对象。待修复对象：${JSON.stringify(narration).slice(0, 12_000)}`
+      content: cleanText(`请重新输出一个严格 JSON 对象。待修复对象：${JSON.stringify(narration)}`, 5_800)
     }
   ];
 }

@@ -111,7 +111,7 @@ function upstreamError(status) {
   return new GameAiError('AI 上游暂时不可用。', 'AI_UPSTREAM_FAILED', 502);
 }
 
-export function createGameAiService({ fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now() } = {}) {
+export function createGameAiService({ fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), timeoutMs = 45_000 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('fetch implementation is required');
   const takeRateSlot = rateLimiter(now);
 
@@ -132,31 +132,36 @@ export function createGameAiService({ fetchImpl = globalThis.fetch, env = proces
         ...(config.protocol === 'gemini' ? { 'x-goog-api-key': key } : { Authorization: `Bearer ${key}` })
       };
 
-      let response;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 45_000);
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
-          response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
+          const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
+          if (!response.ok) {
+            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw upstreamError(response.status);
+            continue;
+          }
+          let data;
+          try { data = await response.json(); }
+          catch (error) {
+            if (error?.name === 'AbortError' || controller.signal.aborted) throw new GameAiError('AI 请求超时。', 'AI_TIMEOUT', 504);
+            throw new GameAiError('AI 上游返回格式无效。', 'AI_UPSTREAM_FAILED', 502);
+          }
+          return {
+            text: extractText(request.provider, data),
+            provider: request.provider,
+            model,
+            transactionId: request.transactionId
+          };
         } catch (error) {
-          if (error?.name === 'AbortError') throw new GameAiError('AI 请求超时。', 'AI_TIMEOUT', 504);
+          if (error instanceof GameAiError) throw error;
+          if (error?.name === 'AbortError' || controller.signal.aborted) throw new GameAiError('AI 请求超时。', 'AI_TIMEOUT', 504);
           throw new GameAiError('无法连接 AI 上游。', 'AI_UPSTREAM_FAILED', 502);
         } finally {
           clearTimeout(timer);
         }
-        if (response.ok) break;
-        if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw upstreamError(response.status);
       }
-
-      let data;
-      try { data = await response.json(); }
-      catch { throw new GameAiError('AI 上游返回格式无效。', 'AI_UPSTREAM_FAILED', 502); }
-      return {
-        text: extractText(request.provider, data),
-        provider: request.provider,
-        model,
-        transactionId: request.transactionId
-      };
+      throw new GameAiError('AI 上游暂时不可用。', 'AI_UPSTREAM_FAILED', 502);
     }
   };
 }

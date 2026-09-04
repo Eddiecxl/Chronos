@@ -21,7 +21,7 @@
 - Panels, slash commands, and the AI system-question channel run under system pause and cannot advance time, NPC plans, combat, deadlines, or random events.
 - The AI director must reject no-progress, contradictory, omniscient-NPC, player-puppeting, and out-of-range responses.
 - Preserve the supplied pink cherry-blossom, ink-mountain, paper, and gold visual identity.
-- Keep Groq, Mistral, Puter, Gemini, SiliconFlow, OpenRouter, and custom OpenAI-compatible choices.
+- Keep Groq, Mistral, Gemini, SiliconFlow/Qwen, OpenRouter, and custom OpenAI-compatible choices. Puter was removed after release review because its remote SDK would execute inside the authenticated Chronos origin.
 - Default to Groq `openai/gpt-oss-120b`; recommend Mistral `mistral-small-latest` second; retain Gemini and Qwen only as optional choices.
 - Personal API keys remain browser-local and never enter game saves, exports, repository files, or server logs.
 - Site keys are read only from Render environment variables by an authenticated, provider-whitelisted server route.
@@ -600,7 +600,7 @@ git commit -m "feat: add non advancing system pause"
 - Create: `test/luoying-ai-turn.test.js`
 
 **Interfaces:**
-- Produces: `createAiClient({ fetchImpl, storage, puterLoader }): AiClient`
+- Produces: `createAiClient({ fetchImpl, storage }): AiClient`
 - Produces: `parseNarration(text, requestType): AiNarration`
 - Produces: `createAiTurnRunner({ aiClient, transcriptStore, now, idFactory }): AiTurnRunner`
 - `AiNarration` is `{ blocks, effects, progress, memory: { facts, entities, chapterSummary? }, suggestions, timeCost }` for world requests and `{ blocks }` for paused system requests.
@@ -647,7 +647,6 @@ Expected: FAIL because Groq still defaults to Qwen and Mistral is absent.
 export const PROVIDERS = {
   groq: { label: 'Groq · GPT-OSS', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1', credentialMode: 'site', recommended: true },
   mistral: { label: 'Mistral', model: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1', credentialMode: 'site', recommended: true },
-  puter: { label: 'Puter.js', model: 'gpt-5-nano', credentialMode: 'none' },
   gemini: { label: 'Google Gemini', model: 'gemini-3.5-flash', credentialMode: 'site', advanced: true },
   siliconflow: { label: 'SiliconFlow', model: 'Qwen/Qwen2.5-7B-Instruct', baseUrl: 'https://api.siliconflow.cn/v1', credentialMode: 'personal', advanced: true },
   openrouter: { label: 'OpenRouter', model: '', baseUrl: 'https://openrouter.ai/api/v1', credentialMode: 'personal', advanced: true },

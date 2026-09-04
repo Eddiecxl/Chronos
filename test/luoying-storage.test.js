@@ -46,6 +46,15 @@ test('local and AI autosaves never share a key', () => {
   assert.equal(adapter.loadAuto('ai').player.name, '万象身');
 });
 
+test('conditional autosave refuses to overwrite a different journey', () => {
+  const adapter = createStorage(memoryStorage());
+  const first = createGameState('先行者', 'ai', () => 'journey-first');
+  const stale = createGameState('迟到者', 'ai', () => 'journey-stale');
+  adapter.saveAuto('ai', first);
+  assert.throws(() => adapter.saveAutoIfJourney('ai', stale, 'journey-stale'), /另一窗口|已改变/);
+  assert.equal(adapter.loadAuto('ai').journeyId, 'journey-first');
+});
+
 test('slot writes reject a mismatched mode', () => {
   const adapter = createStorage(memoryStorage());
   assert.throws(() => adapter.saveSlot('local', 'slot1', createGameState('错位', 'ai')), /模式/);
@@ -60,6 +69,16 @@ test('legacy save import is explicit and leaves the source untouched', () => {
   assert.equal(imported.mode, 'ai');
   assert.equal(adapter.loadAuto('ai').player.name, '旧身');
   assert.equal(raw.getItem('luoying_save'), legacy);
+});
+
+test('legacy manual slot keys are discovered and migrated into matching slots', () => {
+  const legacySlot = JSON.stringify({ name: '旧命簿', realm: 3, exp: 19, spirit: 12 });
+  const raw = memoryStorage({ luoying_slot1_data: legacySlot });
+  const adapter = createStorage(raw);
+  assert.equal(adapter.findLegacySave().player.name, '旧命簿');
+  adapter.importLegacy('local');
+  assert.equal(adapter.loadSlot('local', 'slot1').player.name, '旧命簿');
+  assert.equal(raw.getItem('luoying_slot1_data'), legacySlot);
 });
 
 test('journey export includes transcripts and strips credentials', async () => {
@@ -106,6 +125,34 @@ test('journey import restores state and its complete archive', async () => {
   });
   const restored = await adapter.importJourney('ai', bundle, transcripts);
   assert.equal(restored.player.name, '归档身');
-  assert.equal(adapter.loadAuto('ai').journeyId, 'import-ai');
-  assert.equal((await transcripts.allTurns('import-ai'))[0].blocks[0].name, '林小满');
+  assert.notEqual(adapter.loadAuto('ai').journeyId, 'import-ai');
+  assert.equal((await transcripts.allTurns(restored.journeyId))[0].blocks[0].name, '林小满');
+  assert.deepEqual(await transcripts.allTurns('import-ai'), []);
+});
+
+test('manual journey slots fork a transcript snapshot instead of sharing future history', async () => {
+  let id = 0;
+  const adapter = createStorage(memoryStorage(), { idFactory: () => `slot-copy-${++id}` });
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const live = createGameState('照月', 'ai', () => 'live-journey');
+  await transcripts.appendTurn(live.journeyId, { id: 'before-save', kind: 'world', blocks: [{ type: 'narr', text: '存档前' }] });
+  const snapshot = await adapter.saveJourneySlot('ai', 'slot1', live, transcripts);
+  await transcripts.appendTurn(live.journeyId, { id: 'after-save', kind: 'world', blocks: [{ type: 'narr', text: '存档后' }] });
+  assert.equal(snapshot.journeyId, 'slot-copy-1');
+  assert.deepEqual((await transcripts.allTurns(snapshot.journeyId)).map((turn) => turn.id), ['before-save']);
+  assert.deepEqual((await transcripts.allTurns(live.journeyId)).map((turn) => turn.id), ['before-save', 'after-save']);
+});
+
+test('import always rekeys a journey and cannot replace an existing transcript with the same id', async () => {
+  const adapter = createStorage(memoryStorage(), { idFactory: () => 'safe-import-copy' });
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  await transcripts.appendTurn('collision', { id: 'existing', kind: 'world', blocks: [{ type: 'narr', text: '不可覆盖' }] });
+  const incoming = createGameState('归来者', 'ai', () => 'collision');
+  const restored = await adapter.importJourney('ai', JSON.stringify({
+    format: 'luoying-journey-v3', mode: 'ai', state: incoming,
+    turns: [{ id: 'incoming', kind: 'world', blocks: [{ type: 'narr', text: '导入内容' }] }]
+  }), transcripts);
+  assert.equal(restored.journeyId, 'safe-import-copy');
+  assert.equal((await transcripts.allTurns('collision'))[0].blocks[0].text, '不可覆盖');
+  assert.equal((await transcripts.allTurns('safe-import-copy'))[0].blocks[0].text, '导入内容');
 });

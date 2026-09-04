@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { buildNarrationPrompt, createAiClient, parseNarration, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 
@@ -11,6 +12,12 @@ function fakeStorage(seed = {}) {
     removeItem: (key) => values.delete(key)
   };
 }
+
+test('provider registry never loads remote executable code into the Chronos origin', async () => {
+  const source = await readFile(new URL('../public/luoying-xiantu/ai-client.js', import.meta.url), 'utf8');
+  assert.equal('puter' in PROVIDERS, false);
+  assert.doesNotMatch(source, /js\.puter\.com|createElement\(['"]script['"]\)/);
+});
 
 function jsonResponse(body, status = 200) {
   return { ok: status >= 200 && status < 300, status, json: async () => body };

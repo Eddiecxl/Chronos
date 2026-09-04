@@ -70,6 +70,12 @@ function createMemoryAdapter(memory) {
       memory.set(key, { key, journeyId: cleanJourneyId, order: ++order, ...clean });
       return publicTurn(memory.get(key));
     },
+    async deleteTurn(journeyId, turnId) {
+      const cleanJourneyId = cleanId(journeyId);
+      const cleanTurnId = cleanId(turnId);
+      if (!cleanJourneyId || !cleanTurnId) throw new Error('无效的历程或回合编号。');
+      memory.delete(`${cleanJourneyId}:${cleanTurnId}`);
+    },
     async recentTurns(journeyId, limit = 12) {
       const all = await this.allTurns(journeyId);
       return all.slice(-Math.max(0, Math.min(100, Number(limit) || 0)));
@@ -152,6 +158,16 @@ function createIndexedDbAdapter(indexedDB) {
       await transactionDone(transaction);
       database.close();
       return publicTurn(record);
+    },
+    async deleteTurn(journeyId, turnId) {
+      const cleanJourneyId = cleanId(journeyId);
+      const cleanTurnId = cleanId(turnId);
+      if (!cleanJourneyId || !cleanTurnId) throw new Error('无效的历程或回合编号。');
+      const database = await openDatabase(indexedDB);
+      const transaction = database.transaction(STORE_NAME, 'readwrite');
+      transaction.objectStore(STORE_NAME).delete(`${cleanJourneyId}:${cleanTurnId}`);
+      await transactionDone(transaction);
+      database.close();
     },
     async recentTurns(journeyId, limit = 12) {
       const all = await this.allTurns(journeyId);
