@@ -1,4 +1,5 @@
 import { GAME_MODES, migrateGameState, validateImportedState } from './game-state.js';
+import { createTranscriptStore } from './transcript-store.js';
 
 const LEGACY_KEYS = ['luoying_save_v2', 'luoying_save'];
 const validSlot = (slot) => /^slot[1-3]$/.test(slot);
@@ -9,6 +10,7 @@ const assertMode = (mode) => {
 const autoKey = (mode) => `luoying_v3_${mode}_auto`;
 const slotKey = (mode, slot) => `luoying_v3_${mode}_${slot}`;
 const slotMetaKey = (mode, slot) => `${slotKey(mode, slot)}_meta`;
+const MAX_JOURNEY_BYTES = 4_500_000;
 
 function assertSlot(slot) {
   if (!validSlot(slot)) throw new Error('存档槽位无效。');
@@ -23,6 +25,20 @@ function serializeState(mode, state) {
     updatedAt: new Date().toISOString()
   }, mode);
   return JSON.stringify(clean);
+}
+
+async function readJourneySource(source) {
+  if (typeof source === 'string') {
+    if (source.length > MAX_JOURNEY_BYTES) throw new Error('旅程档案过大。');
+    try { return JSON.parse(source); }
+    catch { throw new Error('旅程档案不是有效的 JSON。'); }
+  }
+  if (typeof Blob === 'function' && source instanceof Blob) return readJourneySource(await source.text());
+  if (!source || typeof source !== 'object') throw new Error('旅程档案格式无效。');
+  let raw;
+  try { raw = JSON.stringify(source); }
+  catch { throw new Error('旅程档案无法读取。'); }
+  return readJourneySource(raw);
 }
 
 export function createStorage(storage = globalThis.localStorage) {
@@ -107,6 +123,47 @@ export function createStorage(storage = globalThis.localStorage) {
       const clean = validateImportedState(entry.parsed, mode);
       storage.setItem(autoKey(mode), serializeState(mode, clean));
       return read(autoKey(mode), mode);
+    },
+    async exportJourney(mode, state, transcriptStore) {
+      assertMode(mode);
+      if (!transcriptStore?.allTurns) throw new Error('游戏记录存储不可用。');
+      const clean = migrateGameState(state, mode);
+      const turns = await transcriptStore.allTurns(clean.journeyId);
+      const raw = JSON.stringify({ format: 'luoying-journey-v3', mode, state: clean, turns });
+      if (raw.length > MAX_JOURNEY_BYTES) throw new Error('旅程档案过大。');
+      return new Blob([raw], { type: 'application/json;charset=utf-8' });
+    },
+    async importJourney(mode, source, transcriptStore) {
+      assertMode(mode);
+      if (!transcriptStore?.allTurns || !transcriptStore?.importTurns || !transcriptStore?.deleteJourney) {
+        throw new Error('游戏记录存储不可用。');
+      }
+      const bundle = await readJourneySource(source);
+      if (bundle.format !== 'luoying-journey-v3' || bundle.mode !== mode || !Array.isArray(bundle.turns)) {
+        throw new Error('旅程档案格式或模式不匹配。');
+      }
+      const clean = validateImportedState(bundle.state, mode);
+
+      const validator = createTranscriptStore({ memory: new Map() });
+      await validator.importTurns(clean.journeyId, bundle.turns);
+
+      const targetKey = autoKey(mode);
+      const previousRaw = storage.getItem(targetKey);
+      const previousTurns = await transcriptStore.allTurns(clean.journeyId);
+      try {
+        await transcriptStore.deleteJourney(clean.journeyId);
+        await transcriptStore.importTurns(clean.journeyId, bundle.turns);
+        storage.setItem(targetKey, serializeState(mode, clean));
+      } catch (error) {
+        try {
+          await transcriptStore.deleteJourney(clean.journeyId);
+          await transcriptStore.importTurns(clean.journeyId, previousTurns);
+        } catch { /* preserve the original import error */ }
+        if (previousRaw === null) storage.removeItem(targetKey);
+        else storage.setItem(targetKey, previousRaw);
+        throw error;
+      }
+      return read(targetKey, mode);
     }
   };
 }

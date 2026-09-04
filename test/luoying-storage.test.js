@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { createStorage } from '../public/luoying-xiantu/storage.js';
+import { createTranscriptStore } from '../public/luoying-xiantu/transcript-store.js';
 
 function memoryStorage(seed = {}) {
   const values = new Map(Object.entries(seed));
@@ -59,4 +60,52 @@ test('legacy save import is explicit and leaves the source untouched', () => {
   assert.equal(imported.mode, 'ai');
   assert.equal(adapter.loadAuto('ai').player.name, '旧身');
   assert.equal(raw.getItem('luoying_save'), legacy);
+});
+
+test('journey export includes transcripts and strips credentials', async () => {
+  const adapter = createStorage(memoryStorage());
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const state = createGameState('照月', 'ai', () => 'export-ai');
+  state.apiKey = 'never-export-this';
+  await transcripts.appendTurn(state.journeyId, {
+    id: 'turn-1', kind: 'world', provider: 'groq', model: 'openai/gpt-oss-120b',
+    blocks: [{ type: 'narr', text: '柴门外传来脚步声。' }]
+  });
+  const blob = await adapter.exportJourney('ai', state, transcripts);
+  const bundle = JSON.parse(await blob.text());
+  assert.equal(bundle.format, 'luoying-journey-v3');
+  assert.equal(bundle.turns[0].blocks[0].text, '柴门外传来脚步声。');
+  assert.doesNotMatch(await blob.text(), /never-export-this/);
+});
+
+test('journey import validates before replacing autosave or transcript archive', async () => {
+  const raw = memoryStorage();
+  const adapter = createStorage(raw);
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const current = createGameState('原身', 'ai', () => 'same-journey');
+  adapter.saveAuto('ai', current);
+  await transcripts.appendTurn(current.journeyId, { id: 'old', kind: 'world', blocks: [{ type: 'narr', text: '旧记录' }] });
+
+  const incoming = createGameState('新身', 'ai', () => 'same-journey');
+  const invalidBundle = JSON.stringify({
+    format: 'luoying-journey-v3', mode: 'ai', state: incoming,
+    turns: [{ id: 'huge', kind: 'world', blocks: [{ type: 'narr', text: 'x'.repeat(101_000) }] }]
+  });
+  await assert.rejects(adapter.importJourney('ai', invalidBundle, transcripts), /过大/);
+  assert.equal(adapter.loadAuto('ai').player.name, '原身');
+  assert.equal((await transcripts.allTurns('same-journey'))[0].id, 'old');
+});
+
+test('journey import restores state and its complete archive', async () => {
+  const adapter = createStorage(memoryStorage());
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const incoming = createGameState('归档身', 'ai', () => 'import-ai');
+  const bundle = JSON.stringify({
+    format: 'luoying-journey-v3', mode: 'ai', state: incoming,
+    turns: [{ id: 'turn-1', kind: 'world', blocks: [{ type: 'dlg', name: '林小满', text: '你终于回来了。' }] }]
+  });
+  const restored = await adapter.importJourney('ai', bundle, transcripts);
+  assert.equal(restored.player.name, '归档身');
+  assert.equal(adapter.loadAuto('ai').journeyId, 'import-ai');
+  assert.equal((await transcripts.allTurns('import-ai'))[0].blocks[0].name, '林小满');
 });
