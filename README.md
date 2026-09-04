@@ -8,6 +8,7 @@ Chronos is a Malaysia-time planning app for protecting focus, coordinating avail
 - Timed quick planning by default, plus all-day plans, editing, completion, duplication, and rescheduling.
 - Responsive bottom navigation so Today, Planner, and Lobby stay reachable on phones.
 - A responsive **PL-900 Exam Trainer** at `/chronos/trainer`, including the saved 350-question configuration and full-screen mode.
+- **落樱仙途**, a complete cultivation text game with separate local and AI journeys, at `/chronos/game`.
 - Friend Radar is loaded only when opened; location sharing is explicitly opt-in and can be stopped from Today.
 - Server-issued signed sessions protect plans, rooms, social data, and live-location actions. A user can only change their own plans and access confirmed friends’ schedules.
 
@@ -47,6 +48,36 @@ ADMIN_PIN=...
 ```
 
 Chronos deliberately has no built-in default admin credentials.
+
+## 落樱仙途 game modes
+
+The Game page opens the same-origin game at `/luoying-xiantu/index.html`. Players choose one journey type at the title screen:
+
+- **本地版** is fully offline and choice-only. It never exposes a free-text action box and uses authored plots, battles, cultivation, equipment, alchemy, relationships, and endings.
+- **AI 版** accepts free-form actions and supports switching providers without changing the journey. It uses fixed story acts and scene contracts to keep the world moving while allowing broader dialogue, characters, locations, and player choices.
+
+Local and AI saves use separate namespaces and cannot overwrite or load into one another. In both modes, cultivation progress is **灵气**, while techniques spend **灵力**. Status, skill, inventory, relationship, location, recap, and history questions enter **时停**: world time, combat, clocks, and NPC plans do not advance.
+
+AI mode is intentionally pure AI. If a provider times out, rejects a response, or returns invalid story data, the complete world state is rolled back and the player can retry, edit the action, or switch provider. The game never inserts local story text as an AI fallback. Validated facts, entities, chapter summaries, unresolved threads, recent scenes, and the complete transcript are retained for continuity and can be exported with the journey.
+
+### AI providers and privacy
+
+Signed-in players can use site-managed Groq, Mistral, or Gemini through `/api/game/ai`. Groq and Mistral are the recommended defaults; Gemini and the retained advanced providers are available for comparison and testing. A model trial arena tests a provider without changing the formal save, transcript, or world time.
+
+Alternatively, a player can select personal-key mode. That key stays in the current browser memory, is never written to a save or export, and is sent directly to the selected provider. Clearing or reloading the page removes it. Provider free tiers, quotas, and model availability are controlled by their vendors and can change.
+
+For Render, add the following variables in the service dashboard. Secret key values must be entered only in Render, never committed:
+
+```text
+GROQ_API_KEY=...
+GROQ_MODEL=openai/gpt-oss-120b
+MISTRAL_API_KEY=...
+MISTRAL_MODEL=mistral-small-latest
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.5-flash
+```
+
+Any provider without a configured server key is safely disabled while the other providers and local mode remain usable. The server accepts only the supported site-provider identifiers, bounds request sizes, rate-limits each account, applies a 45-second timeout, and returns generic errors without exposing provider response bodies or credentials.
 
 ## Publishing checklist
 
