@@ -48,7 +48,7 @@ test('scene contracts carry a goal danger clock and NPC knowledge', () => {
   assert.equal(contract.sceneGoal, state.director.sceneGoal);
   assert.ok(contract.dangerClocks.length > 0);
   assert.equal(contract.chapter.requiredDiscoveries[0].progressId, 'discovery:forest-footprints');
-  assert.deepEqual(contract.actors.find((actor) => actor.id === 'npc:lin-xiaoman').knownFactIds, ['fact:forest-footprints']);
+  assert.ok(contract.actors.find((actor) => actor.id === 'npc:lin-xiaoman').knownFactIds.includes('fact:forest-footprints'));
   assert.equal(Object.isFrozen(contract), true);
   assert.equal(Object.isFrozen(contract.actors), true);
 });
@@ -211,10 +211,19 @@ test('an NPC cannot state forbidden knowledge with an empty block citation', () 
   const contract = createSceneContract(state, '询问魔尊身份', 'turn-empty-citation');
   const narration = {
     ...narrationWithText('林间风声骤停。'),
-    blocks: [{ type: 'dlg', name: '林小满', text: '我知道魔尊真正的名字。', factIds: [] }],
+    blocks: [{ type: 'dlg', name: '林小满', text: '魔尊名为夜无疆。', factIds: [] }],
     usedFactIdsByActor: { 'npc:lin-xiaoman': [] }
   };
   const result = validateAiWorldTurn(state, contract, narration, []);
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => /事实|知识来源|引用/.test(error)));
+});
+
+test('authored NPCs always receive a stable intrinsic fact they can cite', () => {
+  const state = seededAiState();
+  state.memory.entities['npc:lin-xiaoman'].knownFactIds = [];
+  const contract = createSceneContract(state, '和林小满打招呼', 'turn-intrinsic');
+  const actor = contract.actors.find((entry) => entry.id === 'npc:lin-xiaoman');
+  assert.ok(actor.knownFactIds.some((id) => id.startsWith('fact:authored:')));
+  assert.ok(contract.facts.some((fact) => actor.knownFactIds.includes(fact.id)));
 });

@@ -16,7 +16,7 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 3. 每回合必须产生新信息、明确后果或目标进展；不得复述、拖延或绕圈。
 4. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。
 5. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
-6. 每段 NPC 对白都要在该 dlg 块的 factIds 列出实际引用的已知事实；不得用空引用说出秘密或情报。usedFactIdsByActor 同时给出角色汇总。
+6. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总。
 7. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
 {"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"suggestions":["行动一","行动二"],"timeCost":"instant|brief|scene|long"}`;
@@ -102,7 +102,7 @@ function repetitionScore(text) {
 export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now = () => Date.now(), idFactory = defaultId } = {}) {
   if (!aiClient?.narrate) throw new Error('AI 客户端不可用。');
   if (!transcriptStore?.recentTurns || !transcriptStore?.appendTurn) throw new Error('游戏记录存储不可用。');
-  if (stateStore && (!stateStore.saveAuto || !transcriptStore.deleteTurn)) throw new Error('AI 原子存档组件不可用。');
+  if (stateStore && !stateStore.saveAuto) throw new Error('AI 原子存档组件不可用。');
 
   async function executeWorld({ state: source, input, settings = {}, transactionId }, requestType) {
     let contract;
@@ -170,17 +170,19 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       };
       if (stateStore) {
         try {
-          const journaled = migrateGameState({
+          let journaled = migrateGameState({
             ...committed,
             transactionJournal: { type: 'ai-world-turn', turn }
           }, 'ai');
-          if (stateStore.saveAutoIfJourney) stateStore.saveAutoIfJourney('ai', journaled, state.journeyId);
-          else stateStore.saveAuto('ai', journaled);
+          if (stateStore.saveAutoIfJourney) {
+            journaled = stateStore.saveAutoIfJourney('ai', journaled, state.journeyId, state.revision);
+          } else journaled = stateStore.saveAuto('ai', journaled) || journaled;
           try {
             await transcriptStore.appendTurn(committed.journeyId, turn);
-            committed = migrateGameState({ ...committed, transactionJournal: null }, 'ai');
-            if (stateStore.saveAutoIfJourney) stateStore.saveAutoIfJourney('ai', committed, state.journeyId);
-            else stateStore.saveAuto('ai', committed);
+            committed = migrateGameState({ ...journaled, transactionJournal: null }, 'ai');
+            if (stateStore.saveAutoIfJourney) {
+              committed = stateStore.saveAutoIfJourney('ai', committed, state.journeyId, journaled.revision);
+            } else committed = stateStore.saveAuto('ai', committed) || committed;
           } catch {
             committed = journaled;
           }

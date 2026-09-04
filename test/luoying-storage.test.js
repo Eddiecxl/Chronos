@@ -55,6 +55,20 @@ test('conditional autosave refuses to overwrite a different journey', () => {
   assert.equal(adapter.loadAuto('ai').journeyId, 'journey-first');
 });
 
+test('conditional autosave rejects a stale tab on the same journey revision', () => {
+  const adapter = createStorage(memoryStorage());
+  const original = createGameState('同路人', 'ai', () => 'shared-journey');
+  adapter.saveAuto('ai', original);
+  const tabA = structuredClone(adapter.loadAuto('ai'));
+  const tabB = structuredClone(adapter.loadAuto('ai'));
+  tabA.player.gold = 10;
+  const committedA = adapter.saveAutoIfJourney('ai', tabA, tabA.journeyId, tabA.revision);
+  assert.equal(committedA.revision, tabA.revision + 1);
+  tabB.player.gold = 99;
+  assert.throws(() => adapter.saveAutoIfJourney('ai', tabB, tabB.journeyId, tabB.revision), /修订|另一窗口|已改变/);
+  assert.equal(adapter.loadAuto('ai').player.gold, 10);
+});
+
 test('slot writes reject a mismatched mode', () => {
   const adapter = createStorage(memoryStorage());
   assert.throws(() => adapter.saveSlot('local', 'slot1', createGameState('错位', 'ai')), /模式/);

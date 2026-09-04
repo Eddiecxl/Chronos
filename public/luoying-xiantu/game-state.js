@@ -197,6 +197,7 @@ export function createGameState(name = '顾长生', mode = 'local', idFactory = 
     schemaVersion: GAME_SCHEMA_VERSION,
     mode: safeMode,
     journeyId,
+    revision: 0,
     player: {
       name: cleanName(name), realm: 0, hp: 100, maxHp: 100,
       qi: 0, spirit: 30, maxSpirit: 30,
@@ -253,6 +254,7 @@ function normalizeV3(input, expectedMode) {
   const quests = isRecord(input.quests) ? input.quests : {};
 
   base.journeyId = cleanId(input.journeyId, 80) || base.journeyId;
+  base.revision = Math.floor(clamp(input.revision, 0, 999_999_999));
   const maxSpirit = Math.floor(clamp(player.maxSpirit ?? Math.max(30, finite(player.spirit, 30)), 1, 9999));
   base.player = {
     name: cleanName(player.name || base.player.name),

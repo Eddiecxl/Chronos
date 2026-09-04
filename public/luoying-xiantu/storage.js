@@ -103,6 +103,24 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
     return false;
   };
 
+  const writeAutoIfRevision = (mode, state, expectedJourneyId, expectedRevision = state?.revision) => {
+    const expected = Number(expectedRevision);
+    if (!Number.isSafeInteger(expected) || expected < 0) throw new Error('自动存档修订号无效。');
+    const current = read(autoKey(mode), mode);
+    if (current && current.journeyId !== expectedJourneyId) {
+      throw new Error('自动存档已在另一窗口改变；本回合没有覆盖较新的旅程。');
+    }
+    if (current && current.revision !== expected) {
+      throw new Error('自动存档修订已在另一窗口改变；本回合没有覆盖较新的进度。');
+    }
+    if (!current && expected !== 0) {
+      throw new Error('自动存档已被移除或替换；本回合没有重建旧修订。');
+    }
+    const next = migrateGameState({ ...state, revision: expected + 1 }, mode);
+    storage.setItem(autoKey(mode), serializeState(mode, next));
+    return read(autoKey(mode), mode);
+  };
+
   return {
     loadAuto(mode) {
       assertMode(mode);
@@ -113,14 +131,9 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
       storage.setItem(autoKey(mode), serializeState(mode, state));
       return read(autoKey(mode), mode);
     },
-    saveAutoIfJourney(mode, state, expectedJourneyId) {
+    saveAutoIfJourney(mode, state, expectedJourneyId, expectedRevision = state?.revision) {
       assertMode(mode);
-      const current = read(autoKey(mode), mode);
-      if (current && current.journeyId !== expectedJourneyId) {
-        throw new Error('自动存档已在另一窗口改变；本回合没有覆盖较新的旅程。');
-      }
-      storage.setItem(autoKey(mode), serializeState(mode, state));
-      return read(autoKey(mode), mode);
+      return writeAutoIfRevision(mode, state, expectedJourneyId, expectedRevision);
     },
     loadSlot(mode, slot) {
       assertMode(mode);
@@ -205,10 +218,12 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
       if (current && current.journeyId !== clean.journeyId) {
         throw new Error('自动存档已在另一窗口改变；没有恢复旧分支的待写回合。');
       }
+      if (current && current.revision !== clean.revision) {
+        throw new Error('自动存档修订已在另一窗口改变；没有恢复旧修订的待写回合。');
+      }
       await transcriptStore.appendTurn(clean.journeyId, journal.turn);
       const recovered = migrateGameState({ ...clean, transactionJournal: null }, mode);
-      storage.setItem(autoKey(mode), serializeState(mode, recovered));
-      return recovered;
+      return writeAutoIfRevision(mode, recovered, clean.journeyId, clean.revision);
     },
     getSlotMeta(mode, slot) {
       assertMode(mode);

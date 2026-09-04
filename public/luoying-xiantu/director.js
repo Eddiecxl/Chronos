@@ -13,6 +13,7 @@ const AUTHORED_FACTS = {
     subjectId: 'location:cherry-forest', predicate: 'contains', object: '后山出现了不属于落霞宗的魔修足迹'
   }
 };
+const AUTHORED_NPCS_BY_ID = new Map(Object.entries(NPCS).map(([name, npc]) => [npc.id, { name, ...npc }]));
 const PLAYER_PUPPET_PATTERNS = [
   /你(?:立刻|毫不犹豫地|终于)?(?:答应|同意|拒绝|决定|选择|承诺|发誓|加入|背叛|爱上)/,
   /你(?:感到|觉得)(?:无比|非常|由衷)?(?:喜悦|幸福|悔恨|忠诚|爱慕|憎恨)/,
@@ -35,6 +36,22 @@ function currentChapter(state) {
   return exact || CHAPTERS.find((chapter) => chapter.act === state.story.act) || CHAPTERS[0];
 }
 
+function intrinsicFactId(npcId) {
+  return `fact:authored:${String(npcId).replace(/^npc:/, '')}:identity`;
+}
+
+function intrinsicFact(name, npc) {
+  return {
+    id: intrinsicFactId(npc.id),
+    subjectId: npc.id,
+    predicate: 'identity',
+    object: `${name}是${npc.role}；${npc.description}`,
+    sourceTurnId: 'world-bible',
+    createdAtTurn: 0,
+    locked: true
+  };
+}
+
 function authoredActor(name, npc, state) {
   const existing = state.memory.entities[npc.id];
   return {
@@ -44,7 +61,9 @@ function authoredActor(name, npc, state) {
     location: existing?.location || npc.location,
     role: npc.role,
     purpose: existing?.purpose || npc.description,
-    knownFactIds: [...new Set([...(existing?.knownFactIds || []), ...(existing?.facts || [])])]
+    knownFactIds: [...new Set([
+      intrinsicFactId(npc.id), ...(existing?.knownFactIds || []), ...(existing?.facts || [])
+    ])]
   };
 }
 
@@ -57,6 +76,7 @@ function contractActors(state, input) {
   }
   for (const entity of Object.values(state.memory.entities)) {
     if (entity.kind !== 'npc') continue;
+    if (AUTHORED_NPCS_BY_ID.has(entity.id)) continue;
     if (entity.location === state.story.location || String(input).includes(entity.name)) {
       actors.set(entity.id, {
         id: entity.id, name: entity.name, status: entity.status, location: entity.location,
@@ -72,9 +92,14 @@ export function createSceneContract(source, input, turnId) {
   const chapter = currentChapter(state);
   const actors = contractActors(state, input);
   const actorFactIds = new Set(actors.flatMap((actor) => actor.knownFactIds));
-  const facts = state.memory.facts
+  const rememberedFacts = state.memory.facts
     .filter((fact) => fact.locked || actorFactIds.has(fact.id) || chapter.requiredFacts.includes(fact.id))
     .slice(-40);
+  const intrinsicFacts = actors
+    .map((actor) => AUTHORED_NPCS_BY_ID.get(actor.id))
+    .filter(Boolean)
+    .map((npc) => intrinsicFact(npc.name, npc));
+  const facts = [...new Map([...rememberedFacts, ...intrinsicFacts].map((fact) => [fact.id, fact])).values()];
   const clocks = { ...state.director.dangerClocks };
   if (chapter.dangerClock?.id && !(chapter.dangerClock.id in clocks)) clocks[chapter.dangerClock.id] = 0;
   const unlockedLocations = Object.entries(LOCATIONS)
@@ -257,9 +282,8 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
       if (actor && blockFactIds.some((id) => !actor.knownFactIds.includes(id))) {
         errors.push(`角色 ${actor.id} 使用了知识边界之外的事实。`);
       }
-      if (actor && /(?:知道|看见|发现|听说|听见|记得|真相|真名|其实|昨夜|秘密|曾经|来自|位于)/u.test(block.text)
-        && !blockFactIds.length) {
-        errors.push(`角色 ${actor.id} 的事实性对白缺少知识来源引用。`);
+      if (actor && AUTHORED_NPCS_BY_ID.has(actor.id) && !blockFactIds.length) {
+        errors.push(`角色 ${actor.id} 的对白缺少知识来源引用。`);
       }
     }
   }
