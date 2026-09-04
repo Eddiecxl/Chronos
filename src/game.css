@@ -16,6 +16,6 @@
 
 @media (max-width: 900px) {
   .luoying-host {
-    height: calc(100dvh - 152px - env(safe-area-inset-bottom));
+    height: calc(100dvh - 246px - env(safe-area-inset-bottom));
   }
 }

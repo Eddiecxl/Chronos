@@ -14,3 +14,10 @@ test('game host grants no extra browser permissions', async () => {
   assert.doesNotMatch(source, /\ballow=/);
   assert.match(source, /referrerPolicy="same-origin"/);
 });
+
+test('mobile game host reserves both rows of Chronos navigation', async () => {
+  const css = await readFile(new URL('../src/game.css', import.meta.url), 'utf8');
+  const mobileRule = css.match(/@media \(max-width: 900px\)[\s\S]*?height: calc\(100dvh - (\d+)px/);
+  assert.ok(mobileRule, 'mobile host height rule is required');
+  assert.ok(Number(mobileRule[1]) >= 240, 'mobile host must clear the two-row navigation');
+});
