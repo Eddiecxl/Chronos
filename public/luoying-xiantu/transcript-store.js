@@ -14,7 +14,7 @@ function jsonSize(value) {
 
 function sanitizeBlock(block) {
   if (!block || typeof block !== 'object') return null;
-  const type = ['narr', 'dlg', 'sys'].includes(block.type) ? block.type : null;
+  const type = ['narr', 'dlg', 'sys', 'player'].includes(block.type) ? block.type : null;
   const text = cleanText(block.text, 12_000);
   if (!type || !text) return null;
   if (type === 'dlg') return { type, name: cleanText(block.name, 40) || '无名之人', text };

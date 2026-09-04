@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#fff3f6">
+  <meta name="description" content="落樱仙途：本地选择与纯 AI 双版本修仙文字游戏。">
+  <title>落樱仙途 · 此世由你落笔</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Ma+Shan+Zheng&family=Noto+Serif+SC:wght@400;600;800;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div class="petal-field" id="petalField" aria-hidden="true"></div>
+
+  <section class="cover" id="cover" aria-labelledby="gameTitle">
+    <svg class="cover-landscape" viewBox="0 0 900 620" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff8f2"/><stop offset=".6" stop-color="#ffe9f0"/><stop offset="1" stop-color="#fdeedd"/></linearGradient>
+        <linearGradient id="mountain1" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#dce7f5"/><stop offset="1" stop-color="#edf1f8"/></linearGradient>
+        <linearGradient id="mountain2" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b9d2ed"/><stop offset="1" stop-color="#d8e5f4"/></linearGradient>
+        <linearGradient id="mountain3" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#91b6df"/><stop offset="1" stop-color="#b5cfea"/></linearGradient>
+        <radialGradient id="sun" cx=".5" cy=".5" r=".5"><stop offset="0" stop-color="#ffe3b3"/><stop offset="1" stop-color="#ffe3b3" stop-opacity="0"/></radialGradient>
+      </defs>
+      <rect width="900" height="620" fill="url(#sky)"/>
+      <circle cx="660" cy="150" r="150" fill="url(#sun)"/><circle cx="660" cy="150" r="46" fill="#ffd9a0"/>
+      <path d="M0 380 Q120 300 230 350T460 330T700 360T900 330V620H0Z" fill="url(#mountain1)"/>
+      <path d="M0 450 Q160 370 330 420T640 410T900 430V620H0Z" fill="url(#mountain2)"/>
+      <path d="M0 530 Q200 460 400 505T900 500V620H0Z" fill="url(#mountain3)"/>
+      <g stroke="#7a4a3a" fill="none" stroke-linecap="round"><path d="M-10 60C150 90 260 70 360 140" stroke-width="14"/><path d="M180 86C230 60 280 58 330 70" stroke-width="8"/><path d="M250 105C300 130 330 170 355 205" stroke-width="7"/></g>
+      <g fill="#ffb7cd"><circle cx="330" cy="70" r="16"/><circle cx="360" cy="140" r="20"/><circle cx="355" cy="205" r="15"/><circle cx="300" cy="120" r="12"/><circle cx="395" cy="120" r="13"/></g>
+      <g fill="#ffd2e0"><circle cx="336" cy="64" r="8"/><circle cx="368" cy="133" r="9"/><circle cx="360" cy="200" r="7"/><circle cx="399" cy="115" r="6"/></g>
+      <g transform="translate(300 388)" opacity=".8"><path d="M-26 0L0-18 26 0Z" fill="#7d95b8"/><rect x="-14" width="28" height="14" fill="#8fa6c6"/></g>
+    </svg>
+    <div class="cover-content">
+      <p class="seal">落霞宗 · 命簿</p>
+      <h1 id="gameTitle">落樱仙途</h1>
+      <p class="subtitle">一条命，两种写法，此世皆有记</p>
+      <div class="name-field">
+        <label for="characterName">新旅程道号</label>
+        <input id="characterName" maxlength="12" autocomplete="off" value="顾长生" aria-describedby="nameHint">
+        <small id="nameHint">只在开始新旅程时使用</small>
+      </div>
+      <div class="mode-grid" aria-label="选择游戏版本">
+        <article class="mode-card local" id="localModeCard">
+          <span class="mode-kicker">本地版 · 离线稳定</span>
+          <h2>落定命途</h2>
+          <p>完整五幕主线、战斗、炼丹、关系与多结局。只能选择画面中的行动，不会混入 AI 内容。</p>
+          <button class="primary-button" id="newLocalButton">开始本地旅程</button>
+          <button class="secondary-button" id="continueLocalButton" hidden>继续本地存档</button>
+        </article>
+        <article class="mode-card ai" id="aiModeCard">
+          <span class="mode-kicker">AI 版 · 万象自由</span>
+          <h2>万象命途</h2>
+          <p>纯 AI 叙事配合主线导演、长期记忆与防绕圈校验。失败只重试，绝不切回本地剧情。</p>
+          <button class="primary-button ai-primary" id="newAiButton">开始 AI 旅程</button>
+          <button class="secondary-button" id="continueAiButton" hidden>继续 AI 存档</button>
+          <button class="text-button" id="titleAiSettingsButton">先设置 / 试炼模型</button>
+        </article>
+      </div>
+      <aside class="legacy-card" id="legacyCard" hidden>
+        <p id="legacyText">发现旧版存档，可复制到新旅程；原存档不会删除。</p>
+        <div><button id="legacyLocalButton">导入本地版</button><button id="legacyAiButton">导入 AI 版</button></div>
+      </aside>
+      <p class="cover-tip">两个版本的自动存档和手动槽位完全独立 · AI 提供商可随时切换</p>
+    </div>
+  </section>
+
+  <main class="game" id="game" hidden>
+    <header class="topbar">
+      <button class="brand-mini" id="titleButton" title="返回标题"><span>落樱</span><b>仙途</b></button>
+      <div class="status-strip" aria-label="角色状态">
+        <button class="badge badge-name" data-open-panel="character"><span>🌸</span><b id="statusName">顾长生</b></button>
+        <button class="badge badge-realm" data-open-panel="character"><span>境界</span><b id="statusRealm">凡人</b></button>
+        <button class="badge badge-meter" data-open-panel="character" title="气血"><span>❤️</span><b id="statusHp">100/100</b><i><em id="hpBar"></em></i></button>
+        <button class="badge badge-meter qi" data-open-panel="character" title="突破灵气"><span>◈</span><b id="statusQi">0/30</b><i><em id="qiBar"></em></i></button>
+        <button class="badge badge-meter spirit" data-open-panel="character" title="功法灵力"><span>⚡</span><b id="statusSpirit">30/30</b><i><em id="spiritBar"></em></i></button>
+        <button class="badge"><span>💰</span><b id="statusGold">0</b></button>
+        <button class="badge badge-location" data-open-panel="map"><span>📍</span><b id="statusLocation">赵府柴房</b></button>
+        <button class="badge badge-mode" id="modeBadge"><span>命</span><b id="statusMode">本地版</b></button>
+      </div>
+      <nav class="tool-nav" aria-label="游戏功能">
+        <button data-open-panel="character"><span>人物</span><small>身</small></button>
+        <button data-open-panel="quests"><span>任务</span><small>卷</small></button>
+        <button data-open-panel="inventory"><span>背包</span><small>囊</small></button>
+        <button data-open-panel="codex"><span>图鉴</span><small>录</small></button>
+        <button id="historyButton" data-open-panel="history"><span>历史</span><small>忆</small></button>
+        <button id="saveButton"><span>存档</span><small>存</small></button>
+        <button id="aiButton"><span>模型</span><small>灵</small></button>
+      </nav>
+    </header>
+
+    <section class="story-shell">
+      <div class="act-ribbon"><span id="actLabel">第一幕 · 尘缘初醒</span><i></i><small id="dayLabel">第 1 日 · 清晨</small><strong class="pause-badge" id="pauseBadge" hidden>⏸ 时停中</strong></div>
+      <div class="story-log" id="storyLog" role="log" aria-live="polite" aria-label="游戏剧情"></div>
+      <div class="pending-indicator" id="pendingIndicator" hidden><i></i><i></i><i></i><span>命数推演中</span></div>
+
+      <section class="retry-panel" id="retryPanel" hidden aria-live="polite">
+        <h2>这次命数没有落笔</h2>
+        <p id="retryMessage">世界保持在行动前，没有混入本地剧情，也没有推进时间。</p>
+        <div>
+          <button id="retryButton">原样重试</button>
+          <button id="switchProviderButton">切换模型</button>
+          <button id="editRetryButton">修改输入</button>
+          <button id="retryTitleButton">返回标题</button>
+        </div>
+      </section>
+
+      <div class="local-actions" id="localActions" aria-label="本地行动选项"></div>
+
+      <section class="ai-composer" id="aiComposer" hidden>
+        <div class="suggestions ai-suggestions" id="aiSuggestions" aria-label="AI 建议行动"></div>
+        <div class="channel-tabs" role="tablist" aria-label="AI 输入频道">
+          <button id="worldChannel" class="active" type="button" role="tab" aria-selected="true">行动 · 推动世界</button>
+          <button id="systemChannel" type="button" role="tab" aria-selected="false">系统 · 时间停止</button>
+        </div>
+        <form class="inputbar" id="aiInputForm">
+          <label class="sr-only" for="playerInput">输入行动或系统问题</label>
+          <textarea id="playerInput" maxlength="2000" rows="1" placeholder="说什么、做什么，都可以直接写……"></textarea>
+          <button id="sendButton" type="submit"><span>言出</span><i>↗</i></button>
+        </form>
+        <p class="composer-hint" id="composerHint">行动频道会推动时间；AI 失败时世界原样不动。</p>
+      </section>
+    </section>
+  </main>
+
+  <div class="modal-layer" id="panelLayer" hidden>
+    <section class="modal panel-modal" role="dialog" aria-modal="true" aria-labelledby="panelTitle">
+      <header><div><p>命簿内页 · 查看期间时间停止</p><h2 id="panelTitle">人物</h2></div><button class="close-button" data-close="panel" aria-label="关闭">×</button></header>
+      <nav class="modal-tabs" id="panelTabs">
+        <button data-tab="character">人物</button><button data-tab="quests">任务</button><button data-tab="inventory">背包</button><button data-tab="map">地图</button><button data-tab="codex">图鉴</button><button data-tab="history">历史</button>
+      </nav>
+      <div class="panel-content" id="panelContent"></div>
+    </section>
+  </div>
+
+  <div class="modal-layer" id="saveLayer" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="saveTitle">
+      <header><div><p>两个版本 · 各存三世</p><h2 id="saveTitle">存档管理</h2></div><button class="close-button" data-close="save" aria-label="关闭">×</button></header>
+      <div class="save-mode-note" id="saveModeNote"></div>
+      <div class="save-slots" id="saveSlots"></div>
+      <footer class="modal-actions">
+        <button class="secondary-button small" id="exportButton">导出旅程与全文</button>
+        <button class="secondary-button small" id="importButton">导入当前版本</button>
+        <input id="importInput" type="file" accept="application/json,.json" hidden>
+      </footer>
+      <p class="modal-note">导入只接受当前版本；导出包含完整文字记录，但绝不包含 API Key。</p>
+    </section>
+  </div>
+
+  <div class="modal-layer" id="aiLayer" hidden>
+    <section class="modal ai-modal" role="dialog" aria-modal="true" aria-labelledby="aiTitle">
+      <header><div><p>同一 AI 旅程 · 随时换脑</p><h2 id="aiTitle">AI 模型与试炼</h2></div><button class="close-button" data-close="ai" aria-label="关闭">×</button></header>
+      <div class="ai-grid">
+        <label>提供商<select id="providerSelect"></select></label>
+        <label id="credentialField">凭据方式<select id="credentialSelect"><option value="site">Chronos 网站额度</option><option value="personal">自己的 API Key</option></select></label>
+        <label id="keyField">API Key<input id="apiKeyInput" type="password" autocomplete="off" placeholder="仅保留到本页关闭"></label>
+        <label id="baseField">Base URL<input id="baseUrlInput" inputmode="url" placeholder="https://api.example.com/v1"></label>
+        <label class="model-field">模型名称<input id="modelInput" autocomplete="off" placeholder="模型 ID"></label>
+      </div>
+      <p class="provider-tip" id="providerTip"></p>
+      <p class="connection-status" id="connectionStatus" aria-live="polite"></p>
+      <footer class="modal-actions">
+        <button class="secondary-button small" id="clearCredentialButton">清除凭据</button>
+        <button class="secondary-button small" id="testAiButton">测试连接 · 1 次请求</button>
+        <button class="primary-button small" id="saveAiButton">保存并使用</button>
+      </footer>
+
+      <section class="trial-panel" id="aiTrialPanel">
+        <div class="trial-heading"><div><span>独立试炼场</span><h3>两个模型，同题比较</h3></div><small>每个模型消耗 1 次请求；不读取也不写入任何存档</small></div>
+        <label>试炼题目<input id="trialPrompt" maxlength="300" value="青石镇黄昏，追查失踪药师；让一个新线索带来两难选择。"></label>
+        <div class="trial-selects">
+          <label>模型甲<select id="trialProviderA"></select></label>
+          <label>模型乙<select id="trialProviderB"></select></label>
+        </div>
+        <button class="secondary-button small" id="runTrialButton">同时试炼 · 共 2 次请求</button>
+        <div class="trial-results" id="trialResults" aria-live="polite"></div>
+      </section>
+      <p class="modal-note">个人 Key 不写入 LocalStorage、游戏存档、导出文件或文字记录。网站登录凭据不会被“清除凭据”按钮移除。</p>
+    </section>
+  </div>
+
+  <div class="ending-card" id="endingCard" hidden>
+    <p>此世结卷</p><h2 id="endingTitle"></h2><div id="endingText"></div>
+    <button class="primary-button" id="newGamePlusButton">携一念，返回标题</button>
+  </div>
+  <div class="breakthrough" id="breakthrough" hidden aria-hidden="true"><span>突破</span><b id="breakthroughRealm"></b></div>
+  <div class="toast" id="toast" hidden role="status"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
