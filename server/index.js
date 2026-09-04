@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { accountExists, addPlan, addRoomMessage, answerFriendRequest, areFriends, clearAccountLocation, clearNotifications, clearRoomMessages, createAccount, createFriendRequest, createRoom, deleteRoom, deleteRoomAny, dismissNotification, getAdminDashboard, getCachedGeocode, getLiveLocations, getPlans, getRoom, getRoomMessages, getSocial, initStore, kickRoomMember, loginAccount, markMessageSeen, recordUser, removeFriend, removePlan, resetAccountPin, saveCachedGeocode, setAccountPresence, updateAccountLocation, updatePlan, verifyAdminPin } from './store.js';
+import { createGameAiService, validateGameAiBody } from './game-ai.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -12,6 +13,7 @@ const dist = path.join(__dirname, '..', 'dist');
 const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173').split(',').map((value) => value.trim());
 const sessionSecret = process.env.SESSION_SECRET || randomBytes(48).toString('base64url');
 const sessionLifetime = 7 * 24 * 60 * 60 * 1000;
+const gameAi = createGameAiService({ fetchImpl: fetch, env: process.env });
 
 app.disable('x-powered-by');
 app.use((_, res, next) => {
@@ -98,6 +100,15 @@ const geocodeMalaysia = async (location) => {
 
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', storage: process.env.MONGODB_URI ? 'mongodb' : 'local', timeZone: 'Asia/Kuala_Lumpur' }));
 app.post('/api/users', requireAuth, async (req, res) => { await recordUser(req.auth.username); res.status(201).json({ username: req.auth.username }); });
+app.post('/api/game/ai', requireAuth, async (req, res, next) => {
+  try {
+    const result = await gameAi.generate(req.auth.usernameKey, validateGameAiBody(req.body));
+    res.json(result);
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    next(error);
+  }
+});
 
 app.post('/api/accounts/register', async (req, res, next) => {
   const username = cleanUsername(req.body.username); const password = String(req.body.password || ''); const pin = String(req.body.pin || '');

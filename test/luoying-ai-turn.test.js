@@ -55,11 +55,13 @@ test('an AI failure leaves the complete world byte-for-byte unchanged', async ()
 
 test('invalid narration receives one repair call then rolls back', async () => {
   let calls = 0;
+  const requestTypes = [];
   const state = seededAiState();
   const before = JSON.stringify(state);
-  const runner = runnerWithNarrator(async () => { calls += 1; return noProgressResponse(); });
+  const runner = runnerWithNarrator(async (_settings, context) => { calls += 1; requestTypes.push(context.requestType); return noProgressResponse(); });
   const result = await runner.runWorld({ state, input: '继续', settings: { provider: 'groq' } });
   assert.equal(calls, 2);
+  assert.deepEqual(requestTypes, ['world', 'repair']);
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(state), before);
 });
@@ -83,15 +85,20 @@ test('a paused AI answer cannot commit effects or time', async () => {
 });
 
 test('AI journey opening contains only model-authored story blocks', async () => {
-  const runner = runnerWithNarrator(async () => JSON.stringify({
+  const requestTypes = [];
+  const runner = runnerWithNarrator(async (_settings, context) => {
+    requestTypes.push(context.requestType);
+    return JSON.stringify({
     blocks: [{ type: 'narr', text: '冷雨敲在柴房破瓦上，你在草席间睁开眼。' }],
     effects: {},
     progress: { advanced: ['opening:awakened'], consequences: ['赵府家丁正在接近'], openLoops: ['loop:escape-zhao'] },
     memory: { facts: [], entities: [] },
     suggestions: ['查看门缝', '寻找趁手物件'], timeCost: 'instant'
-  }));
+    });
+  });
   const result = await runner.runOpening({ state: seededAiState(), settings: { provider: 'groq' } });
   assert.equal(result.ok, true);
+  assert.deepEqual(requestTypes, ['world']);
   assert.match(result.blocks[0].text, /冷雨/);
 });
 

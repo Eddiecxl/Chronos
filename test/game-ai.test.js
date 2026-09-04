@@ -1,0 +1,104 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createGameAiService, validateGameAiBody } from '../server/game-ai.js';
+
+const jsonResponse = (body, status = 200) => ({
+  ok: status >= 200 && status < 300,
+  status,
+  json: async () => body
+});
+
+const validRequest = (provider) => ({
+  provider,
+  model: '',
+  transactionId: 'tx-1',
+  requestType: 'world',
+  messages: [{ role: 'user', content: '继续剧情' }]
+});
+
+test('site proxy accepts only its three configured providers', () => {
+  assert.throws(() => validateGameAiBody(validRequest('custom')), /提供商/);
+  assert.equal(validateGameAiBody({ provider: 'mistral', transactionId: 'tx-1', requestType: 'world', messages: [{ role: 'user', content: 'x' }] }).provider, 'mistral');
+});
+
+test('validation bounds transaction ids request types and message sizes', () => {
+  assert.throws(() => validateGameAiBody({ ...validRequest('groq'), transactionId: '../secret' }), /事务/);
+  assert.throws(() => validateGameAiBody({ ...validRequest('groq'), requestType: 'opening' }), /请求类型/);
+  assert.throws(() => validateGameAiBody({ ...validRequest('groq'), messages: Array.from({ length: 13 }, () => ({ role: 'user', content: 'x' })) }), /消息/);
+  assert.throws(() => validateGameAiBody({ ...validRequest('groq'), messages: [{ role: 'user', content: 'x'.repeat(6001) }] }), /消息/);
+});
+
+test('Groq uses the fixed official endpoint and configured production model', async () => {
+  const calls = [];
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret', GROQ_MODEL: 'openai/gpt-oss-120b' },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ choices: [{ message: { content: '结果' } }] });
+    }
+  });
+  const result = await service.generate('player', validRequest('groq'));
+  assert.equal(calls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
+  assert.equal(JSON.parse(calls[0].options.body).model, 'openai/gpt-oss-120b');
+  assert.equal(result.model, 'openai/gpt-oss-120b');
+  assert.ok(!JSON.stringify(result).includes('secret'));
+});
+
+test('Mistral uses the fixed official endpoint', async () => {
+  const calls = [];
+  const service = createGameAiService({
+    env: { MISTRAL_API_KEY: 'secret', MISTRAL_MODEL: 'mistral-small-latest' },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ choices: [{ message: { content: '结果' } }] });
+    }
+  });
+  await service.generate('player', validRequest('mistral'));
+  assert.equal(calls[0].url, 'https://api.mistral.ai/v1/chat/completions');
+});
+
+test('Gemini uses its fixed endpoint and extracts candidate text', async () => {
+  const calls = [];
+  const service = createGameAiService({
+    env: { GEMINI_API_KEY: 'secret', GEMINI_MODEL: 'gemini-3.5-flash' },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: '星光落下。' }] } }] });
+    }
+  });
+  const result = await service.generate('player', validRequest('gemini'));
+  assert.match(calls[0].url, /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.5-flash:generateContent$/);
+  assert.equal(result.text, '星光落下。');
+});
+
+test('missing site credentials return a stable non-secret error code', async () => {
+  const service = createGameAiService({ env: {}, fetchImpl: async () => jsonResponse({}) });
+  await assert.rejects(service.generate('player', validRequest('groq')), (error) => {
+    assert.equal(error.code, 'AI_NOT_CONFIGURED');
+    assert.equal(error.status, 503);
+    assert.doesNotMatch(error.message, /API_KEY/);
+    return true;
+  });
+});
+
+test('transient upstream responses receive exactly one retry', async () => {
+  let calls = 0;
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' },
+    fetchImpl: async () => (++calls === 1
+      ? jsonResponse({ error: { message: 'busy secret' } }, 503)
+      : jsonResponse({ choices: [{ message: { content: '恢复' } }] }))
+  });
+  assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
+  assert.equal(calls, 2);
+});
+
+test('per-account rolling minute limits do not affect another account', async () => {
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' }, now: () => 1000,
+    fetchImpl: async () => jsonResponse({ choices: [{ message: { content: 'ok' } }] })
+  });
+  for (let index = 0; index < 12; index += 1) await service.generate('one', { ...validRequest('groq'), transactionId: `tx-${index}` });
+  await assert.rejects(service.generate('one', { ...validRequest('groq'), transactionId: 'tx-limit' }), (error) => error.code === 'AI_RATE_LIMITED');
+  assert.equal((await service.generate('two', validRequest('groq'))).text, 'ok');
+});

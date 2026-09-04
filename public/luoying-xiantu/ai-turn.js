@@ -95,7 +95,8 @@ export function createAiTurnRunner({ aiClient, transcriptStore, now = () => Date
       let raw = '';
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        raw = await aiClient.narrate(settings, { requestType, transactionId: txId, messages });
+        const proxyRequestType = attempt === 1 ? 'repair' : requestType === 'opening' ? 'world' : requestType;
+        raw = await aiClient.narrate(settings, { requestType: proxyRequestType, transactionId: txId, messages });
         try {
           narration = narrationFrom(raw, requestType);
           validation = validateAiWorldTurn(state, contract, narration, recentTurns);
