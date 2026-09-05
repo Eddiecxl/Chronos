@@ -20,9 +20,8 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 6. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。场景契约 player 内的 qi、spirit 与上限是绝对事实；正文若提到当前数值或充盈/耗尽状态，必须与它完全一致。qi、spirit、hp、effects、progress 等 JSON 字段只用于结构，绝不能出现在玩家可见正文，正文统一写“灵气、灵力、气血”等中文术语。
 7. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
 8. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总，其键优先使用 actors 中的精确 id（兼容 name），不得自创 actor: 前缀。NPC 可在 dlg 对白中用“你”称呼我。
-9. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
-{"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"suggestions":["行动一","行动二"],"timeCost":"instant|brief|scene|long"}`;
+{"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"timeCost":"instant|brief|scene|long"}`;
 
 const cleanText = (value, max = 2_000) => String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
 const defaultId = () => globalThis.crypto?.randomUUID?.() || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -36,8 +35,7 @@ function recentForPrompt(turns) {
       type: block.type,
       ...(block.name ? { name: cleanText(block.name, 40) } : {}),
       text: cleanText(block.text, 500)
-    })) : [],
-    suggestions: Array.isArray(turn.suggestions) ? turn.suggestions.slice(0, 3).map((value) => cleanText(value, 80)) : []
+    })) : []
   }));
 }
 
@@ -142,7 +140,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           narration = narrationFrom(raw, requestType);
           validation = validateAiWorldTurn(state, contract, narration, recentTurns);
         } catch (error) {
-          narration = { blocks: [], suggestions: [], raw: cleanText(raw, 12_000) };
+          narration = { blocks: [], raw: cleanText(raw, 12_000) };
           validation = { ok: false, errors: [error.message], fingerprint: '' };
         }
         if (validation.ok) break;
@@ -171,7 +169,6 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
         provider: settings.provider || 'groq',
         model: settings.model || PROVIDERS[settings.provider || 'groq']?.model || '',
         blocks: narration.blocks,
-        suggestions: narration.suggestions,
         fingerprint: validation.fingerprint,
         createdAt: new Date(now()).toISOString()
       };
@@ -199,7 +196,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           throw error;
         }
       } else await transcriptStore.appendTurn(committed.journeyId, turn);
-      return { ok: true, state: committed, blocks: narration.blocks, suggestions: narration.suggestions, turn };
+      return { ok: true, state: committed, blocks: narration.blocks, turn };
     } catch (error) {
       return failure(error, cleanInput, txId, contract, source);
     }
@@ -240,7 +237,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           blocks: answer.blocks, createdAt: new Date(now()).toISOString()
         };
         await transcriptStore.appendTurn(state.journeyId, turn);
-        return { ok: true, state, blocks: answer.blocks, suggestions: [], turn };
+        return { ok: true, state, blocks: answer.blocks, turn };
       } catch (error) {
         return failure(error, cleanInput, txId, undefined);
       }

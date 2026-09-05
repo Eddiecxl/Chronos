@@ -15,6 +15,15 @@ test('HTML exposes mode choice local actions AI channels and pause status', asyn
   }
 });
 
+test('AI interface has no suggestion container or suggestion renderer', async () => {
+  const { html, script } = await readUi();
+  assert.doesNotMatch(html, /id="aiSuggestions"/);
+  assert.doesNotMatch(script, /renderAiSuggestions/);
+  assert.match(script, /localActions/);
+  assert.match(script, /dom\.localActions\.hidden = mode !== 'local';/);
+  assert.match(script, /dom\.aiComposer\.hidden = mode !== 'ai';/);
+});
+
 test('interface exposes retry history independent saves and credential clearing', async () => {
   const { html } = await readUi();
   for (const id of ['retryPanel', 'retryButton', 'editRetryButton', 'historyButton', 'saveSlots', 'importButton', 'exportButton', 'clearCredentialButton']) {

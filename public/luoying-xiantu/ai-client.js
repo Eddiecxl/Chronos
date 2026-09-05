@@ -117,9 +117,6 @@ export function parseNarration(text, requestType = 'world') {
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('AI 返回内容不是对象。');
   const blocks = parseBlocks(data, requestType);
   if (requestType === 'system') return { blocks };
-  const suggestions = Array.isArray(data.suggestions)
-    ? data.suggestions.slice(0, 5).map((entry) => cleanText(typeof entry === 'string' ? entry : entry?.value || entry?.label, 160)).filter(Boolean)
-    : [];
   const usedFactIdsByActor = {};
   if (data.usedFactIdsByActor && typeof data.usedFactIdsByActor === 'object' && !Array.isArray(data.usedFactIdsByActor)) {
     for (const [actorId, ids] of Object.entries(data.usedFactIdsByActor).slice(0, 16)) {
@@ -131,7 +128,6 @@ export function parseNarration(text, requestType = 'world') {
     effects: data.effects && typeof data.effects === 'object' && !Array.isArray(data.effects) ? data.effects : {},
     progress: normalizeProgress(data.progress),
     memory: normalizeMemory(data.memory),
-    suggestions,
     timeCost: ['instant', 'brief', 'scene', 'long'].includes(data.timeCost) ? data.timeCost : 'brief',
     usedFactIdsByActor,
     entities: normalizeMemory(data.memory).entities
@@ -173,7 +169,7 @@ export function buildNarrationPrompt(state, history, input) {
     },
     {
       role: 'user',
-      content: `最近记录：${JSON.stringify(recent)}\n玩家原话：“${cleanText(input, 2_000)}”\n输出 blocks、effects、progress、memory、suggestions、timeCost。`
+      content: `最近记录：${JSON.stringify(recent)}\n玩家原话：“${cleanText(input, 2_000)}”\n输出 blocks、effects、progress、memory、timeCost。`
     }
   ];
 }

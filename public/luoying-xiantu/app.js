@@ -15,7 +15,7 @@ const dom = Object.fromEntries([
   'titleAiSettingsButton', 'legacyCard', 'legacyText', 'legacyLocalButton', 'legacyAiButton', 'titleButton',
   'statusName', 'statusRealm', 'statusHp', 'statusQi', 'statusSpirit', 'statusGold', 'statusLocation', 'statusMode',
   'hpBar', 'qiBar', 'spiritBar', 'modeBadge', 'actLabel', 'dayLabel', 'pauseBadge', 'storyLog', 'pendingIndicator',
-  'localActions', 'aiComposer', 'aiSuggestions', 'worldChannel', 'systemChannel', 'aiInputForm', 'playerInput', 'sendButton',
+  'localActions', 'aiComposer', 'worldChannel', 'systemChannel', 'aiInputForm', 'playerInput', 'sendButton',
   'composerHint', 'retryPanel', 'retryMessage', 'retryButton', 'switchProviderButton', 'editRetryButton',
   'retryTitleButton', 'panelLayer', 'panelTitle', 'panelTabs', 'panelContent', 'saveLayer', 'saveButton',
   'saveModeNote', 'saveSlots', 'exportButton', 'importButton', 'importInput', 'aiLayer', 'aiButton', 'providerSelect',
@@ -150,29 +150,11 @@ function renderLocalChoices() {
 }
 
 function renderModeControls() {
-  const local = mode === 'local';
-  dom.localActions.hidden = !local;
-  dom.aiComposer.hidden = local;
+  dom.localActions.hidden = mode !== 'local';
+  dom.aiComposer.hidden = mode !== 'ai';
   dom.aiButton.hidden = false;
-  if (local) renderLocalChoices();
+  if (mode === 'local') renderLocalChoices();
   updateChannelUi();
-}
-
-function renderAiSuggestions(suggestions = []) {
-  dom.aiSuggestions.replaceChildren();
-  if (mode !== 'ai') return;
-  for (const suggestion of suggestions.slice(0, 5)) {
-    const button = node('button', '', suggestion);
-    button.type = 'button';
-    button.addEventListener('click', () => {
-      channel = 'world';
-      updateChannelUi();
-      dom.playerInput.value = suggestion;
-      resizeComposer();
-      runAiWorld(suggestion);
-    });
-    dom.aiSuggestions.append(button);
-  }
 }
 
 function updateChannelUi() {
@@ -255,7 +237,6 @@ async function runAiOpening(transactionId) {
   }
   state = result.state;
   for (const block of result.blocks) appendStoryBlock(block);
-  renderAiSuggestions(result.suggestions);
   renderTopbar();
 }
 
@@ -276,7 +257,6 @@ async function runAiWorld(input, transactionId) {
   for (const block of result.blocks) appendStoryBlock(block);
   dom.playerInput.value = '';
   resizeComposer();
-  renderAiSuggestions(result.suggestions);
   renderTopbar();
 }
 
@@ -331,7 +311,6 @@ async function enterGame(nextState, { skipOpening = false } = {}) {
   const turns = await renderTranscript();
   renderTopbar();
   renderModeControls();
-  if (mode === 'ai') renderAiSuggestions([...turns].reverse().find((turn) => turn.kind === 'world')?.suggestions || []);
   if (mode === 'ai' && !skipOpening && !turns.some((turn) => turn.kind === 'world')) await runAiOpening();
 }
 

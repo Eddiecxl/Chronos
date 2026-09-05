@@ -458,8 +458,6 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   }
   if (PLAYER_PUPPET_PATTERNS.some((pattern) => pattern.test(allText))) errors.push('AI 不得替玩家说话、决定关键选择或指定感受。');
 
-  const suggestions = Array.isArray(narration.suggestions) ? narration.suggestions.filter((value) => cleanText(value, 160)) : [];
-  if (suggestions.length < 2 || suggestions.length > 5) errors.push('必须提供 2–5 个有区别的后续行动。');
   if (!(narration.timeCost in TIME_COSTS)) errors.push('timeCost 必须是 instant、brief、scene 或 long。');
 
   const progress = narration.progress && typeof narration.progress === 'object' ? narration.progress : {};

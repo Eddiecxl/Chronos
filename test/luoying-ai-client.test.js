@@ -124,6 +124,26 @@ test('parser preserves per-dialogue fact citations for local validation', () => 
   assert.deepEqual(parsed.blocks[0].factIds, ['fact:forest-footprints']);
 });
 
+test('parser discards legacy AI suggestions while retaining progress data', () => {
+  const parsed = parseNarration(JSON.stringify({
+    blocks: [{ type: 'narr', text: '我在墙角发现一枚新的赵府腰牌。' }],
+    effects: {},
+    progress: { advanced: ['discovery:zhao-token'], consequences: ['赵府腰牌暴露了追兵身份'] },
+    memory: {},
+    suggestions: ['查看腰牌', '立刻离开'],
+    timeCost: 'brief'
+  }));
+  assert.equal('suggestions' in parsed, false);
+  assert.deepEqual(parsed.progress.advanced, ['discovery:zhao-token']);
+});
+
+test('narration prompt requests free-text world data without suggested actions', () => {
+  const state = createGameState('照月', 'ai');
+  const messages = buildNarrationPrompt(state, [], '查看门缝');
+  assert.doesNotMatch(messages[1].content, /suggestions/);
+  assert.match(messages[1].content, /progress/);
+});
+
 test('parser rejects JavaScript-shaped output instead of evaluating it', () => {
   assert.throws(() => parseNarration("({blocks:[{type:'narr',text:'坏'}]})"), /JSON/);
   assert.equal(globalThis.__luoyingInjected, undefined);

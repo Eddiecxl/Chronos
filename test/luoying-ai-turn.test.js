@@ -51,6 +51,16 @@ function runnerWithNarrator(narrate, transcriptStore = createTranscriptStore({ m
   return createAiTurnRunner({ aiClient: { narrate }, transcriptStore, idFactory: () => 'tx-test', now: () => 1000 });
 }
 
+test('world runner ignores legacy suggestions in AI responses and stored turns', async () => {
+  const transcriptStore = createTranscriptStore({ memory: new Map() });
+  const runner = runnerWithNarrator(async () => validWorldResponse(), transcriptStore);
+  const result = await runner.runWorld({ state: seededAiState(), input: '查看门缝', settings: { provider: 'groq' } });
+  assert.equal(result.ok, true);
+  assert.equal('suggestions' in result, false);
+  assert.equal('suggestions' in result.turn, false);
+  assert.equal('suggestions' in (await transcriptStore.allTurns('ai-journey'))[0], false);
+});
+
 test('an AI failure leaves the complete world byte-for-byte unchanged', async () => {
   const state = seededAiState();
   state.director.chapterTurns = 3;
