@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createGameState } from '../public/luoying-xiantu/game-state.js';
+import { createGameState, migrateGameState } from '../public/luoying-xiantu/game-state.js';
 import { applyValidatedEffects, dispatchLocalChoice, getAvailableActions } from '../public/luoying-xiantu/game-engine.js';
 
 test('the local intro enters the sect through stable choice ids', () => {
@@ -110,6 +110,20 @@ test('owned equipment can be equipped through its inventory choice', () => {
   state.inventory.items['玄铁剑'] = 1;
   const result = dispatchLocalChoice(state, 'item:equip:玄铁剑', () => 0.5);
   assert.equal(result.state.equipment.weapon, '玄铁剑');
+});
+
+test('local equipment changes remain selected after a save/load migration', () => {
+  const state = createGameState('沈桃', 'local');
+  state.pending = null;
+  state.inventory.items['玄铁剑'] = 1;
+  state.equipment.weapon = '木剑';
+  state.equipment.slots.hands = '木剑';
+
+  const equipped = dispatchLocalChoice(state, 'item:equip:玄铁剑', () => 0.5).state;
+  const loaded = migrateGameState(structuredClone(equipped), 'local');
+
+  assert.equal(loaded.equipment.weapon, '玄铁剑');
+  assert.equal(loaded.equipment.slots.hands, '玄铁剑');
 });
 
 test('alchemy consumes herbs and creates a pill through a recipe choice', () => {

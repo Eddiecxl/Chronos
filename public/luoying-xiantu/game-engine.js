@@ -1,4 +1,5 @@
 import { migrateGameState } from './game-state.js';
+import { normalizeEquipment } from './equipment.js';
 import {
   ACHIEVEMENTS, ENDINGS, ENEMIES, ITEMS, LOCATIONS, NPCS, QUESTS,
   RANDOM_EVENTS, REALMS, STORY_SCENES, TECHNIQUES
@@ -20,6 +21,17 @@ function addItem(state, name, amount = 1) {
   state.inventory.items[name] = Math.max(0, (state.inventory.items[name] || 0) + Math.floor(amount));
   if (state.inventory.items[name] === 0) delete state.inventory.items[name];
   uniquePush(state.codex.items, name);
+  return true;
+}
+
+function equipLocalItem(state, name) {
+  const item = ITEMS[name];
+  if (!item?.slot) return false;
+  state.equipment = normalizeEquipment({
+    ...state.equipment,
+    [item.type]: name,
+    slots: { ...state.equipment.slots, [item.slot]: name }
+  });
   return true;
 }
 
@@ -205,7 +217,7 @@ function handleIntro(state, raw, blocks) {
     state.pending = null;
     uniquePush(state.codex.locations, '落霞宗外门');
     addItem(state, '外门青衫', 1);
-    state.equipment.armor = '外门青衫';
+    equipLocalItem(state, '外门青衫');
     addQuest(state, 'outer-trial', blocks);
     unlockAchievement(state, 'first-step', blocks);
     unlockAchievement(state, 'sect-disciple', blocks);
@@ -426,7 +438,7 @@ function useOrEquipItem(state, raw, blocks) {
   const item = ITEMS[name];
   if (!item) return false;
   if (/装备|穿上|佩戴/.test(raw) && ['weapon', 'armor', 'accessory'].includes(item.type)) {
-    state.equipment[item.type] = name;
+    equipLocalItem(state, name);
     blocks.push(sys(`已经装备 ${name}。${item.description}`));
     return true;
   }
