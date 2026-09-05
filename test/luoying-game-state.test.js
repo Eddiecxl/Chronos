@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState, migrateGameState, validateImportedState } from '../public/luoying-xiantu/game-state.js';
+import { buildInventoryView, buildMapView } from '../public/luoying-xiantu/panel-view.js';
 
 test('new games have a fixed mode and separate qi and spirit pools', () => {
   const state = createGameState('照月', 'ai', () => 'journey-ai');
@@ -68,4 +69,23 @@ test('v3 AI equipment migrates into the seven validated equipment slots', () => 
   assert.equal(state.equipment.slots.hands, '玄铁剑');
   assert.equal(state.equipment.slots.body, '流云法袍');
   assert.equal(state.equipment.slots.neck, '同心结');
+});
+
+test('v3 AI save without a codex discovers only persisted location and owned items', () => {
+  const state = migrateGameState({
+    schemaVersion: 3,
+    mode: 'ai',
+    player: { name: '照月' },
+    story: { location: '青石镇' },
+    inventory: { items: { '玄铁剑': 1, '回春丹': 1, '问天剑': 0 }, materials: { '止血草': 2, '星盘碎片': 0 } },
+    equipment: { weapon: '玄铁剑' }
+  }, 'ai');
+
+  assert.deepEqual(state.codex.locations, ['青石镇']);
+  assert.deepEqual(buildMapView(state).map((entry) => entry.name), ['青石镇']);
+  assert.deepEqual(buildInventoryView(state).map((entry) => entry.name).sort(), ['回春丹', '止血草', '玄铁剑'].sort());
+  assert.equal(JSON.stringify(state.codex).includes('问天剑'), false);
+  assert.equal(JSON.stringify(state.codex).includes('星盘碎片'), false);
+  assert.equal(JSON.stringify(state.codex).includes('飞升台'), false);
+  assert.deepEqual(state.codex.characters, []);
 });

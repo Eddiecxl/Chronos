@@ -329,6 +329,15 @@ function normalizeV3(input, expectedMode) {
     items: stringList(codex.items, 200, 40),
     endings: stringList(codex.endings, 20, 40)
   };
+  if (mode === 'ai' && !isRecord(input.codex)) {
+    const ownedItems = [...new Set([
+      ...Object.entries(base.inventory.items),
+      ...Object.entries(base.inventory.materials)
+    ].filter(([, amount]) => amount > 0).map(([name]) => name))];
+    const storedLocation = cleanText(story.location, 40);
+    base.codex.locations = storedLocation ? [storedLocation] : [];
+    base.codex.items = ownedItems;
+  }
   base.endings = {
     unlocked: stringList(endings.unlocked, 20, 40),
     newGamePlus: Boolean(endings.newGamePlus)
