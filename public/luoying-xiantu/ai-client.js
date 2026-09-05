@@ -27,6 +27,12 @@ export const PROVIDERS = {
   custom: { label: '自定义接口', model: '', baseUrl: '', credentialMode: 'personal', advanced: true, tip: 'OpenAI Chat Completions 兼容接口。' }
 };
 
+export function modelsForProvider(providerId) {
+  const provider = PROVIDERS[providerId];
+  if (!provider) return [];
+  return [...(provider.models || (provider.model ? [provider.model] : []))];
+}
+
 const cleanText = (value, max) => String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
 const allowedRole = (role) => ['system', 'user', 'assistant'].includes(role) ? role : 'user';
 
@@ -163,7 +169,7 @@ export function buildNarrationPrompt(state, history, input) {
   return [
     {
       role: 'system',
-      content: `你是中文修仙文字游戏《落樱仙途》的纯 AI 叙事引擎。不得调用或模仿本地预写剧情，不得替玩家决定关键行动或感受。每个世界回合必须带来新信息、后果或目标推进。灵气只用于突破，灵力只用于施展功法。只输出严格 JSON。当前状态：${JSON.stringify(snapshot)}`
+      content: `你是中文修仙文字游戏《落樱仙途》的纯 AI 叙事引擎。所有 narr 旁白必须以主角第一人称“我”书写，只写我能亲历、感知或合理推断的内容；不得用“你、主角、玩家”称呼主角，不得切到他人内心或场外全知视角。不得调用或模仿本地预写剧情，不得替玩家决定关键行动、对白、承诺或感受。世界回合用具体过程展现行动、环境或人物反应、明确后果与新进展，不得用摘要带过。每个世界回合必须带来可验证的新信息、状态变化、危险变化或目标推进。灵气只用于突破，灵力只用于施展功法。NPC 对白独立放在 dlg，可在对白中用“你”称呼我。只输出严格 JSON。当前状态：${JSON.stringify(snapshot)}`
     },
     {
       role: 'user',
@@ -216,7 +222,16 @@ function extractGemini(data) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function requestJson(fetchImpl, url, options, attempts = 2) {
+function retryWaitMs(response, data, fallback) {
+  const headerSeconds = Number(response?.headers?.get?.('retry-after'));
+  const message = String(data?.error?.message || data?.error || '');
+  const messageSeconds = Number(message.match(/try again in\s+([\d.]+)s/i)?.[1]);
+  const seconds = Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : messageSeconds;
+  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
+  return Math.max(250, Math.min(30_000, Math.ceil(seconds * 1_000)));
+}
+
+async function requestJson(fetchImpl, url, options, attempts = 2, sleep = delay) {
   let lastError;
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const controller = new AbortController();
@@ -228,18 +243,21 @@ async function requestJson(fetchImpl, url, options, attempts = 2) {
       const message = data?.error?.message || data?.error || `HTTP ${response.status}`;
       if (![429, 502, 503].includes(response.status) || attempt === attempts - 1) throw new Error(String(message));
       lastError = new Error(String(message));
+      const waitMs = retryWaitMs(response, data, attempt ? 2_400 : 900);
+      clearTimeout(timer);
+      await sleep(waitMs);
+      continue;
     } catch (error) {
       if (error?.name === 'AbortError') throw new Error('AI 请求超时。');
       if (!lastError || attempt === attempts - 1) throw error;
     } finally {
       clearTimeout(timer);
     }
-    await delay(attempt ? 2400 : 900);
   }
   throw lastError || new Error('AI 请求失败。');
 }
 
-export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage } = {}) {
+export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, sleep = delay } = {}) {
   if (!fetchImpl) throw new Error('当前环境不支持网络请求。');
   const client = {
     loadSettings() {
@@ -265,7 +283,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ provider: settings.provider, model: settings.model, messages, requestType, transactionId })
-        });
+        }, 3, sleep);
         if (typeof data?.text !== 'string' || !data.text.trim()) throw new Error('网站 AI 返回为空。');
         return data.text;
       }
@@ -282,7 +300,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.key },
           body: JSON.stringify({ systemInstruction: { parts: [{ text: systemText }] }, contents, generationConfig: { temperature: 0.85, responseMimeType: 'application/json' } })
-        });
+        }, 3, sleep);
         return extractGemini(data);
       }
 
@@ -295,7 +313,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
           model: settings.model, messages, temperature: 0.85, max_tokens: 1800,
           ...(settings.provider === 'groq' ? { response_format: { type: 'json_object' } } : {})
         })
-      });
+      }, 3, sleep);
       return extractOpenAi(data);
     },
     async testConnection(settings) {

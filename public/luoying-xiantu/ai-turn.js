@@ -12,12 +12,14 @@ import { LOCATIONS } from './game-data.js';
 const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一叙事作者。本回合绝不能使用本地预写剧情作后备。
 规则：
 1. 严格遵守场景契约、已知事实、死亡状态、地点和数值上限。
-2. 不得替玩家说话、决定关键选择、指定感受或把玩家写成旁观者。
-3. 每回合必须产生新信息、明确后果或目标进展；不得复述、拖延或绕圈。
-4. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。
-5. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
-6. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总。
-7. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
+2. 所有 narr 旁白必须使用主角第一人称“我”，绝不能以“你、主角、玩家”称呼主角。只写我亲眼所见、亲耳所闻、身体感受及有依据的推断；不得切换到场外角色的内心、秘密行动或全知视角。
+3. 逐字尊重玩家原话。不得替我新增对白、承诺、选择、立场、感情或未输入的关键动作；玩家未决定的事必须停在可选择处。
+4. 普通世界回合应有约 260–700 个中文字，用具体场面依次展现“我的行动发生 → 环境或 NPC 反应 → 明确结果 → 新线索、代价或局势推进”，不得摘要带过、复述、拖延或绕圈。
+5. 每回合必须产生可验证的新事实、数值/关系/地点变化、危险时钟变化、新开/解决的悬念或章节/任务进展；不能只填写装饰性的 scene 标签。
+6. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。场景契约 player 内的 qi、spirit 与上限是绝对事实；正文若提到当前数值或充盈/耗尽状态，必须与它完全一致。qi、spirit、hp、effects、progress 等 JSON 字段只用于结构，绝不能出现在玩家可见正文，正文统一写“灵气、灵力、气血”等中文术语。
+7. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
+8. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总，其键优先使用 actors 中的精确 id（兼容 name），不得自创 actor: 前缀。NPC 可在 dlg 对白中用“你”称呼我。
+9. 提供 2–5 个有实质差异的行动建议，但玩家仍可自由输入。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
 {"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"suggestions":["行动一","行动二"],"timeCost":"instant|brief|scene|long"}`;
 
@@ -65,7 +67,7 @@ function compactContract(contract) {
 
 function buildWorldMessages(contract, memoryPacket, recentTurns, requestType) {
   const openingRule = requestType === 'opening'
-    ? '这是开篇：所有可见剧情文字都必须由你生成。让玩家醒来并感到迫近的危险，但不要替玩家采取行动。'
+    ? '这是开篇：所有可见剧情文字都必须由你生成。以“我”从昏沉中恢复感知写起，让我察觉迫近危险，但停在第一个需要由我决定的行动前。progress.advanced 必须至少包含精确值 "opening:awakened"。'
     : '这是普通世界行动：逐字尊重场景契约内的 playerInput，并让它产生真实后果。';
   return [
     {
@@ -129,8 +131,9 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       let validation;
       let raw = '';
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const proxyRequestType = attempt === 1 ? 'repair' : requestType === 'opening' ? 'world' : requestType;
+      const maxAttempts = 3;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const proxyRequestType = attempt > 0 ? 'repair' : requestType === 'opening' ? 'world' : requestType;
         raw = await aiClient.narrate(settings, { requestType: proxyRequestType, transactionId: txId, messages });
         try {
           narration = narrationFrom(raw, requestType);
@@ -140,7 +143,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           validation = { ok: false, errors: [error.message], fingerprint: '' };
         }
         if (validation.ok) break;
-        if (attempt === 0) {
+        if (attempt < 2) {
           messages = [
             ...messages,
             { role: 'assistant', content: cleanText(raw, 5_800) },
@@ -148,7 +151,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           ];
         }
       }
-      if (!validation?.ok) throw new Error(`AI 内容连续两次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
+      if (!validation?.ok) throw new Error(`AI 内容连续 ${maxAttempts} 次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
 
       let committed = commitValidatedWorldTurn(state, contract, narration);
       committed = registerEntityCandidates(committed, narration.memory?.entities || [], txId);

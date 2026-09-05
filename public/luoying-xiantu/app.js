@@ -5,7 +5,7 @@ import {
 } from './game-engine.js';
 import { createStorage } from './storage.js';
 import { createTranscriptStore } from './transcript-store.js';
-import { createAiClient, PROVIDERS } from './ai-client.js';
+import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
 import { createAiTurnRunner } from './ai-turn.js';
 import { classifyTurn } from './turn-router.js';
 
@@ -19,7 +19,7 @@ const dom = Object.fromEntries([
   'composerHint', 'retryPanel', 'retryMessage', 'retryButton', 'switchProviderButton', 'editRetryButton',
   'retryTitleButton', 'panelLayer', 'panelTitle', 'panelTabs', 'panelContent', 'saveLayer', 'saveButton',
   'saveModeNote', 'saveSlots', 'exportButton', 'importButton', 'importInput', 'aiLayer', 'aiButton', 'providerSelect',
-  'credentialField', 'credentialSelect', 'keyField', 'apiKeyInput', 'baseField', 'baseUrlInput', 'modelInput',
+  'credentialField', 'credentialSelect', 'keyField', 'apiKeyInput', 'baseField', 'baseUrlInput', 'modelInput', 'modelOptions',
   'providerTip', 'connectionStatus', 'clearCredentialButton', 'testAiButton', 'saveAiButton', 'trialPrompt',
   'trialProviderA', 'trialProviderB', 'runTrialButton', 'trialResults', 'endingCard', 'endingTitle', 'endingText',
   'newGamePlusButton', 'breakthrough', 'breakthroughRealm', 'toast', 'petalField'
@@ -611,6 +611,11 @@ function syncAiFields(resetModel = false) {
   dom.keyField.hidden = none || dom.credentialSelect.value !== 'personal';
   dom.baseField.hidden = id !== 'custom';
   if (resetModel) dom.modelInput.value = provider.model;
+  dom.modelOptions.replaceChildren(...modelsForProvider(id).map((model) => {
+    const option = document.createElement('option');
+    option.value = model;
+    return option;
+  }));
   const siteMode = siteCapable && dom.credentialSelect.value === 'site';
   dom.modelInput.disabled = false;
   dom.modelInput.title = siteMode
@@ -645,6 +650,11 @@ function collectAiSettings() {
 
 function saveAiSettings() {
   const collected = collectAiSettings();
+  const siteModels = collected.credentialMode === 'site' ? modelsForProvider(collected.provider) : [];
+  if (siteModels.length && !siteModels.includes(collected.model)) {
+    dom.connectionStatus.textContent = '这个模型不在网站允许列表中，请从模型建议中选择。';
+    return;
+  }
   runtimeKey = collected.key;
   aiSettings = aiClient.saveSettings(collected);
   renderTopbar();

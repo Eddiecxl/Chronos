@@ -28,10 +28,18 @@ function seededAiState() {
 }
 
 function narrationWithText(text) {
+  const detailedText = `${text}我俯身拨开积在树根旁的湿叶，泥土里残留的痕迹被雨水冲成断续细线。风穿过樱林时带来一缕陌生焦味，我循着气味望向西侧石径，记下灯火移动的方向和枝叶折断的位置。这些变化让我有了可以继续追查的依据，却也意味着藏在暗处的人已经离得不远。`;
   return {
-    blocks: [{ type: 'narr', text }], effects: {},
-    progress: { advanced: ['scene:new-information'], consequences: ['魔修察觉调查'], openLoops: ['loop:demonic-trail'] },
-    memory: [], suggestions: ['拒绝邀请', '追问目的'], timeCost: 'brief'
+    blocks: [{ type: 'narr', text: detailedText }], effects: {},
+    progress: {
+      advanced: ['scene:new-information'], consequences: ['魔修察觉调查'],
+      openLoops: ['loop:new-evidence'], dangerClocks: { demonicTrail: 1 }
+    },
+    memory: {
+      facts: [{ subjectId: 'world:trail', predicate: 'changed', object: '樱林西侧出现可追查的新痕迹', confidence: 1 }],
+      entities: []
+    },
+    suggestions: ['拒绝邀请', '追问目的'], timeCost: 'brief'
   };
 }
 
@@ -53,6 +61,39 @@ test('scene contracts carry a goal danger clock and NPC knowledge', () => {
   assert.equal(Object.isFrozen(contract.actors), true);
 });
 
+test('the opening contract exposes Zhao Tianba as a canonical actor instead of a generated duplicate', () => {
+  const state = createGameState('照月', 'ai', () => 'opening-journey');
+  const contract = createSceneContract(state, '我刚在赵府柴房醒来', 'turn-opening');
+  const zhao = contract.actors.find((actor) => actor.name === '赵天霸');
+  assert.equal(zhao?.id, 'npc:zhao-tianba');
+  assert.ok(zhao.knownFactIds.includes('fact:authored:zhao-tianba:identity'));
+  assert.ok(contract.facts.some((fact) => fact.id === 'fact:authored:zhao-tianba:identity'));
+});
+
+test('the opening may stop at the first choice without inventing a player-action consequence', () => {
+  const state = createGameState('照月', 'ai', () => 'opening-no-consequence');
+  const contract = createSceneContract(state, '生成旅程开篇：主角刚在赵府柴房醒来，等待玩家作出第一个行动。', 'turn-opening-no-consequence');
+  const result = validateAiWorldTurn(state, contract, {
+    blocks: [{ type: 'narr', text: '我从潮湿的稻草间醒来，后脑的钝痛随着呼吸一阵阵加深。月光从破窗漏进来，照出门边晃动的两道人影；铁锁正在被人从外面拨动，木屑也随着每次撞击落到地上。我摸到身旁一截断木，又看见后窗插销已经腐朽，门外的人却在这时喊出了赵天霸的名字。危险已经逼近，而我尚未采取任何行动。' }],
+    effects: {},
+    progress: { advanced: ['opening:awakened'], consequences: [], openLoops: ['loop:escape-zhao'], dangerClocks: {} },
+    memory: { facts: [], entities: [] }, suggestions: ['查看门缝', '尝试松开后窗'], timeCost: 'instant'
+  }, []);
+  assert.equal(result.ok, true);
+});
+
+test('known NPC fact summaries may use the displayed actor name as their key', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我问林小满足迹来自何处', 'turn-name-key');
+  const narration = narrationWithText('我把沾着黑砂的叶片托到林小满面前，请她辨认上面的气味。');
+  narration.blocks.push({
+    type: 'dlg', name: '林小满', text: '你手里的黑砂和我昨夜看到的足迹来自同一个方向。',
+    factIds: ['fact:forest-footprints']
+  });
+  narration.usedFactIdsByActor = { 林小满: ['fact:forest-footprints'] };
+  assert.equal(validateAiWorldTurn(state, contract, narration, []).ok, true);
+});
+
 test('a world response with no progress is rejected', () => {
   const state = seededAiState();
   const contract = createSceneContract(state, '继续交谈', 'turn-8');
@@ -71,6 +112,121 @@ test('AI cannot speak or decide a critical action for the player', () => {
   const result = validateAiWorldTurn(state, contract, narrationWithText('你答应加入魔宗，并感到无比喜悦。'), []);
   assert.equal(result.ok, false);
   assert.ok(result.errors.some((error) => /玩家/.test(error)));
+});
+
+test('world narration must stay in the protagonist first person while NPC dialogue may address me', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我停在树后观察', 'turn-first-person');
+  const secondPerson = {
+    ...narrationWithText('你停在树后，雨水顺着你的衣袖滴进泥里。远处的巡山灯火忽然转向这边。'),
+    progress: {
+      advanced: ['discovery:patrol-route'], consequences: ['巡山弟子改变了搜索方向'],
+      openLoops: ['loop:patrol-route'], dangerClocks: { demonicTrail: 1 }
+    },
+    memory: { facts: [{ subjectId: 'world:patrol', predicate: 'route', object: '巡山灯火转向樱林西侧', confidence: 1 }] }
+  };
+  const rejected = validateAiWorldTurn(state, contract, secondPerson, []);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.errors.some((error) => /第一人称|视角/.test(error)));
+
+  const firstPerson = {
+    ...secondPerson,
+    blocks: [
+      { type: 'narr', text: '我停在树后，雨水顺着衣袖滴进泥里。远处的巡山灯火忽然转向这边，我看见领头弟子俯身检查被踩断的樱枝。灯笼映出的影子在泥地上越拉越长，我屏住呼吸，顺着树根慢慢挪开半步，鞋底却碰到一枚带着余温的黑砂。那名弟子立刻抬头，手也按上了腰间剑柄；这条藏身路线已经不再安全。' },
+      { type: 'dlg', name: '林小满', text: '你别出声，他们正在循着足迹找过来。', factIds: ['fact:forest-footprints'] }
+    ],
+    usedFactIdsByActor: { 'npc:lin-xiaoman': ['fact:forest-footprints'] }
+  };
+  assert.equal(validateAiWorldTurn(state, contract, firstPerson, []).ok, true);
+});
+
+test('first-person narration cannot invent a decision the player did not make', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我听完黑衣人的条件', 'turn-no-puppet');
+  const result = validateAiWorldTurn(state, contract, {
+    ...narrationWithText('我听完黑衣人的条件，立刻答应加入魔宗，并发誓从此效忠。他递来的血契在雨中泛起暗红微光，林间阵纹随之亮起。'),
+    effects: { relationships: { 林小满: -5 } },
+    progress: {
+      advanced: ['relationship:masked-man:pact'], consequences: ['血契开始生效'],
+      openLoops: ['loop:blood-oath'], dangerClocks: { demonicTrail: 1 }
+    }
+  }, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /替玩家|擅自|决定/.test(error)));
+});
+
+test('narration may present a pending decision without choosing it for the player', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我听完双方的条件', 'turn-pending-choice');
+  const narration = narrationWithText('我听完双方的条件，意识到必须在天亮前作出决定，但此刻没有答应任何一方。');
+  const result = validateAiWorldTurn(state, contract, narration, []);
+  assert.equal(result.ok, true);
+});
+
+test('first-person narration cannot reveal an off-screen character inner monologue', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我留在樱林检查足迹', 'turn-no-omniscience');
+  const result = validateAiWorldTurn(state, contract, {
+    ...narrationWithText('我蹲在樱树下拨开湿泥，指尖碰到一粒尚有余温的黑砂。与此同时，远在戒律堂的执事暗自决定明日便将我逐出宗门。'),
+    effects: {},
+    progress: {
+      advanced: ['discovery:warm-black-sand'], consequences: ['我找到一条仍然新鲜的魔修踪迹'],
+      openLoops: ['loop:warm-black-sand'], dangerClocks: { demonicTrail: 1 }
+    },
+    memory: { facts: [{ subjectId: 'world:trail', predicate: 'fresh', object: '黑砂尚有余温', confidence: 1 }] }
+  }, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /全知|视角|亲历/.test(error)));
+});
+
+test('thin summary prose is rejected even when it claims progress metadata', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我检查泥里的足迹', 'turn-depth');
+  const result = validateAiWorldTurn(state, contract, {
+    blocks: [{ type: 'narr', text: '我检查了足迹，发现有问题。' }],
+    effects: { qi: 1 },
+    progress: {
+      advanced: ['discovery:odd-footprint'], consequences: ['调查有所进展'],
+      openLoops: ['loop:odd-footprint'], dangerClocks: { demonicTrail: 1 }
+    },
+    memory: { facts: [{ subjectId: 'world:trail', predicate: 'oddity', object: '足迹混有魔砂', confidence: 1 }] },
+    suggestions: ['继续检查', '返回宗门'], timeCost: 'brief'
+  }, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /过短|展开|细节/.test(error)));
+});
+
+test('narration cannot swap the current qi and spirit values in prose', () => {
+  const state = createGameState('照月', 'ai', () => 'stat-journey');
+  const contract = createSceneContract(state, '我检查体内状态', 'turn-stat-consistency');
+  const narration = narrationWithText('我凝神内视，发现体内只有三十点灵气，灵力却已经几乎耗尽。');
+  const result = validateAiWorldTurn(state, contract, narration, []);
+  assert.equal(state.player.qi, 0);
+  assert.equal(state.player.spirit, 30);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /灵气|灵力|数值/.test(error)));
+});
+
+test('narration cannot leak internal JSON field names into visible story prose', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我感受体内力量', 'turn-no-schema-leak');
+  const narration = narrationWithText('我沉下呼吸感受经脉，确认 spirit 仍然充足，随后把注意力移回林间的脚步声。');
+  const result = validateAiWorldTurn(state, contract, narration, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /内部|字段|术语/.test(error)));
+});
+
+test('a world turn needs a concrete state memory clock or loop change rather than a decorative scene id', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我继续等待', 'turn-concrete-progress');
+  const result = validateAiWorldTurn(state, contract, {
+    blocks: [{ type: 'narr', text: '我靠在湿冷的树干后继续等待。风从林隙穿过，吹得枝头雨珠接连坠落；远处灯火来回晃动，却没有任何人靠近，也没有新的痕迹出现。' }],
+    effects: {},
+    progress: { advanced: ['scene:still-waiting'], consequences: ['什么也没有改变'], openLoops: ['loop:demonic-trail'], dangerClocks: {} },
+    memory: { facts: [], entities: [] }, suggestions: ['换个位置观察', '返回宗门'], timeCost: 'brief'
+  }, []);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /实际进展|状态|线索/.test(error)));
 });
 
 test('dead actors and facts outside NPC knowledge are rejected', () => {
@@ -102,7 +258,7 @@ test('validated commits advance time clocks loops and authored chapters without 
   const state = seededAiState();
   const contract = createSceneContract(state, '把证据交给执事', 'turn-8');
   const narration = {
-    blocks: [{ type: 'narr', text: '证据被送入戒律堂。' }],
+    blocks: [{ type: 'narr', text: '我把装着魔砂与足迹拓印的布包交到戒律堂案前。值守弟子先是皱眉，随后取出验魔针逐一核对；针尖转黑的刹那，堂内原本松散的说话声全停了。执事当场封住后山令牌，又派人通知巡山队改换暗号。我虽然暂时摆脱独自查证的风险，却也让藏在宗门里的眼线知道证据已经暴露。' }],
     effects: { qi: 12, spirit: -4 },
     progress: {
       advanced: ['chapter:act2-forest-signs:complete'], consequences: ['宗门开始戒备'],
@@ -157,7 +313,7 @@ test('authored discovery progress creates the stable fact required by a chapter 
   state.memory.entities['npc:lin-xiaoman'].knownFactIds = [];
   const contract = createSceneContract(state, '查清足迹并把证据交给宗门', 'turn-authored-fact');
   const narration = {
-    ...narrationWithText('泥痕中的魔砂证明这串足迹来自魔修，证据随即送往戒律堂。'),
+    ...narrationWithText('我在泥痕深处挑出几粒黑砂，验魔符贴近时立刻卷边发焦，足以证明这串足迹来自魔修。我用油纸封住样本，再把足印的方向与深浅逐一拓下，随后沿避雨石廊赶到戒律堂。值守弟子核对证据后敲响警钟，后山各处阵门随即落锁；我的发现终于迫使宗门正视潜入者。'),
     progress: {
       advanced: ['discovery:forest-footprints', 'chapter:act2-forest-signs:complete'],
       consequences: ['戒律堂开始封锁后山'], openLoops: [], dangerClocks: { demonicTrail: 1 }
@@ -173,7 +329,7 @@ test('danger clocks enforce their authored limit and create a deterministic afte
   state.director.dangerClocks.demonicTrail = 5;
   const contract = createSceneContract(state, '追踪魔气源头', 'turn-danger');
   const narration = {
-    ...narrationWithText('魔气骤然冲破林间阵眼，巡山弟子被迫后撤。'),
+    ...narrationWithText('我刚追到林间阵眼，脚下石纹便被涌出的黑气一寸寸撑裂。灵光与魔气相撞，震得我虎口发麻，守在两侧的巡山弟子也被逼得接连后退。最后一枚阵钉崩飞后，原本受困的魔气沿山脊散开，留下三条不同方向的痕迹；敌人显然趁阵眼破裂开始转移。'),
     progress: {
       advanced: ['danger:demonicTrail:erupts'], consequences: ['阵眼破裂，魔修开始转移'],
       openLoops: [], dangerClocks: { demonicTrail: 1 }

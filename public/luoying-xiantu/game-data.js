@@ -109,6 +109,7 @@ export const QUESTS = {
 export const CHAPTERS = [
   {
     id: 'act1-awakening', act: 1, goal: '逃离赵府并保住自己的性命', entry: '在赵府柴房醒来',
+    actorIds: ['npc:zhao-tianba'],
     requiredFacts: [], optionalThreads: ['loop:lost-memory'], dangerClock: { id: 'zhaoPursuit', limit: 4 },
     exits: [{ progressId: 'chapter:act1-awakening:complete', nextChapterId: 'act1-rain-alley' }]
   },

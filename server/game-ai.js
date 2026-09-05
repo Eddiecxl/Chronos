@@ -27,6 +27,7 @@ const TRANSIENT_STATUSES = new Set([429, 502, 503]);
 const ROLES = new Set(['system', 'user', 'assistant']);
 const MINUTE_LIMIT = 12;
 const DAY_LIMIT = 240;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 class GameAiError extends Error {
   constructor(message, code, status) {
@@ -123,7 +124,18 @@ function upstreamError(status) {
   return new GameAiError('AI 上游暂时不可用。', 'AI_UPSTREAM_FAILED', 502);
 }
 
-export function createGameAiService({ fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), timeoutMs = 45_000 } = {}) {
+function retryWaitMs(response, data, fallback = 900) {
+  const headerSeconds = Number(response?.headers?.get?.('retry-after'));
+  const message = String(data?.error?.message || data?.error || '');
+  const messageSeconds = Number(message.match(/try again in\s+([\d.]+)s/i)?.[1]);
+  const seconds = Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : messageSeconds;
+  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
+  return Math.max(250, Math.min(30_000, Math.ceil(seconds * 1_000)));
+}
+
+export function createGameAiService({
+  fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), timeoutMs = 45_000, sleep = delay
+} = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('fetch implementation is required');
   const takeRateSlot = rateLimiter(now);
 
@@ -150,13 +162,16 @@ export function createGameAiService({ fetchImpl = globalThis.fetch, env = proces
         ...(config.protocol === 'gemini' ? { 'x-goog-api-key': key } : { Authorization: `Bearer ${key}` })
       };
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
           const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
           if (!response.ok) {
-            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw upstreamError(response.status);
+            const errorData = await response.json().catch(() => ({}));
+            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 2) throw upstreamError(response.status);
+            clearTimeout(timer);
+            await sleep(retryWaitMs(response, errorData));
             continue;
           }
           let data;

@@ -33,8 +33,12 @@ const systemResponseWithInjectedEffects = () => JSON.stringify({
   effects: { gold: 999 }, progress: { advanced: ['illegal'] }, timeCost: 'long'
 });
 
+function detailedFirstPerson(text) {
+  return `我贴近门缝，先听见鞋底碾过碎石的轻响，才从木板裂隙看清${text}我没有贸然推门，而是顺着墙角继续观察。雨水正从破瓦滴到草席边缘，屋外灯影每隔片刻便掠过一次；后窗的旧插销已经松动，药车轮印则一直通向巷口。这些细节给了我新的退路，也让追兵开始缩小搜查范围。`;
+}
+
 const validWorldResponse = (text = '门缝外掠过两道人影，其中一人腰间挂着赵府铁牌。') => JSON.stringify({
-  blocks: [{ type: 'narr', text }], effects: { qi: 8 },
+  blocks: [{ type: 'narr', text: detailedFirstPerson(text) }], effects: { qi: 8 },
   progress: { advanced: ['discovery:zhao-scouts'], consequences: ['追兵开始搜查柴房'], openLoops: ['loop:escape-route'], dangerClocks: { zhaoPursuit: 1 } },
   memory: {
     facts: [{ subjectId: 'world:pursuit', predicate: 'identified', object: '柴房外有两名赵府追兵', confidence: 1 }],
@@ -63,15 +67,15 @@ test('an AI failure leaves the complete world byte-for-byte unchanged', async ()
   assert.equal(result.retry.input, '推开石门');
 });
 
-test('invalid narration receives one repair call then rolls back', async () => {
+test('invalid narration receives two repair calls then rolls back', async () => {
   let calls = 0;
   const requestTypes = [];
   const state = seededAiState();
   const before = JSON.stringify(state);
   const runner = runnerWithNarrator(async (_settings, context) => { calls += 1; requestTypes.push(context.requestType); return noProgressResponse(); });
   const result = await runner.runWorld({ state, input: '继续', settings: { provider: 'groq' } });
-  assert.equal(calls, 2);
-  assert.deepEqual(requestTypes, ['world', 'repair']);
+  assert.equal(calls, 3);
+  assert.deepEqual(requestTypes, ['world', 'repair', 'repair']);
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(state), before);
 });
@@ -83,6 +87,20 @@ test('one repair attempt can turn an invalid response into a committed world tur
   assert.equal(result.ok, true);
   assert.equal(calls, 2);
   assert.equal(result.state.player.qi, 8);
+});
+
+test('a second repair attempt can recover a stubborn malformed model response', async () => {
+  let calls = 0;
+  const requestTypes = [];
+  const runner = runnerWithNarrator(async (_settings, context) => {
+    calls += 1;
+    requestTypes.push(context.requestType);
+    return calls < 3 ? noProgressResponse() : validWorldResponse();
+  });
+  const result = await runner.runWorld({ state: seededAiState(), input: '查看门缝', settings: { provider: 'groq' } });
+  assert.equal(result.ok, true);
+  assert.equal(calls, 3);
+  assert.deepEqual(requestTypes, ['world', 'repair', 'repair']);
 });
 
 test('a paused AI answer cannot commit effects or time', async () => {
@@ -99,7 +117,7 @@ test('AI journey opening contains only model-authored story blocks', async () =>
   const runner = runnerWithNarrator(async (_settings, context) => {
     requestTypes.push(context.requestType);
     return JSON.stringify({
-    blocks: [{ type: 'narr', text: '冷雨敲在柴房破瓦上，你在草席间睁开眼。' }],
+    blocks: [{ type: 'narr', text: '冷雨敲在柴房破瓦上，我在潮湿草席间睁开眼。后脑仍残留着钝痛，掌心按到的却不是熟悉床褥，而是一层混着泥水的碎稻草。我刚撑起半边身体，门外便传来急促脚步和铁器碰撞声；一束灯光从门缝扫过，停在锁扣附近。屋里只有断腿木凳、半扇松动后窗与一把生锈柴刀。门锁已经开始响动，留给我的时间不多了。' }],
     effects: {},
     progress: { advanced: ['opening:awakened'], consequences: ['赵府家丁正在接近'], openLoops: ['loop:escape-zhao'] },
     memory: { facts: [], entities: [] },

@@ -157,7 +157,7 @@
         <label id="credentialField">凭据方式<select id="credentialSelect"><option value="site">Chronos 网站额度</option><option value="personal">自己的 API Key</option></select></label>
         <label id="keyField">API Key<input id="apiKeyInput" type="password" autocomplete="off" placeholder="仅保留到本页关闭"></label>
         <label id="baseField">Base URL<input id="baseUrlInput" inputmode="url" placeholder="https://api.example.com/v1"></label>
-        <label class="model-field">模型名称<input id="modelInput" autocomplete="off" placeholder="模型 ID"></label>
+        <label class="model-field">模型名称<input id="modelInput" list="modelOptions" autocomplete="off" placeholder="选择或输入模型 ID"><datalist id="modelOptions"></datalist></label>
       </div>
       <p class="provider-tip" id="providerTip"></p>
       <p class="connection-status" id="connectionStatus" aria-live="polite"></p>

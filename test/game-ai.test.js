@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameAiService, validateGameAiBody } from '../server/game-ai.js';
 
-const jsonResponse = (body, status = 200) => ({
+const jsonResponse = (body, status = 200, headers = {}) => ({
   ok: status >= 200 && status < 300,
   status,
+  headers: { get: (name) => headers[String(name).toLowerCase()] ?? null },
   json: async () => body
 });
 
@@ -127,12 +128,44 @@ test('transient upstream responses receive exactly one retry', async () => {
   let calls = 0;
   const service = createGameAiService({
     env: { GROQ_API_KEY: 'secret' },
+    sleep: async () => {},
     fetchImpl: async () => (++calls === 1
       ? jsonResponse({ error: { message: 'busy secret' } }, 503)
       : jsonResponse({ choices: [{ message: { content: '恢复' } }] }))
   });
   assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
   assert.equal(calls, 2);
+});
+
+test('site proxy honors the upstream retry-after delay before retrying a rate limit', async () => {
+  let calls = 0;
+  const waits = [];
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' },
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    fetchImpl: async () => (++calls === 1
+      ? jsonResponse({ error: { message: 'Please try again in 6.25s' } }, 429, { 'retry-after': '6.25' })
+      : jsonResponse({ choices: [{ message: { content: '恢复' } }] }))
+  });
+  assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
+  assert.deepEqual(waits, [6250]);
+});
+
+test('site proxy can follow two rolling rate-limit windows before succeeding', async () => {
+  let calls = 0;
+  const waits = [];
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' },
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return jsonResponse({ error: { message: 'try again in 3s' } }, 429, { 'retry-after': '3' });
+      if (calls === 2) return jsonResponse({ error: { message: 'try again in 1.25s' } }, 429, { 'retry-after': '1.25' });
+      return jsonResponse({ choices: [{ message: { content: '恢复' } }] });
+    }
+  });
+  assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
+  assert.deepEqual(waits, [3000, 1250]);
 });
 
 test('upstream timeout remains active while the response body is being read', async () => {

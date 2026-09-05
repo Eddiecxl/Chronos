@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { buildNarrationPrompt, createAiClient, parseNarration, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
+import { buildNarrationPrompt, createAiClient, modelsForProvider, parseNarration, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 
 function fakeStorage(seed = {}) {
@@ -19,8 +19,12 @@ test('provider registry never loads remote executable code into the Chronos orig
   assert.doesNotMatch(source, /js\.puter\.com|createElement\(['"]script['"]\)/);
 });
 
-function jsonResponse(body, status = 200) {
-  return { ok: status >= 200 && status < 300, status, json: async () => body };
+function jsonResponse(body, status = 200, headers = {}) {
+  return {
+    ok: status >= 200 && status < 300, status,
+    headers: { get: (name) => headers[String(name).toLowerCase()] ?? null },
+    json: async () => body
+  };
 }
 
 const testContext = () => ({
@@ -36,6 +40,18 @@ test('Gemini defaults to the stable 3.6 Flash model', () => {
   assert.equal(PROVIDERS.gemini.model, 'gemini-3.6-flash');
 });
 
+test('the settings model picker receives only the selected provider models', () => {
+  assert.deepEqual(modelsForProvider('groq'), [
+    'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b',
+    'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b'
+  ]);
+  assert.deepEqual(modelsForProvider('gemini'), [
+    'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash',
+    'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'
+  ]);
+  assert.deepEqual(modelsForProvider('missing'), []);
+});
+
 test('personal Groq requests JSON object mode for reliable game turns', async () => {
   const calls = [];
   const client = createAiClient({
@@ -47,6 +63,37 @@ test('personal Groq requests JSON object mode for reliable game turns', async ()
   });
   await client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext());
   assert.deepEqual(calls[0].response_format, { type: 'json_object' });
+});
+
+test('personal AI waits for the upstream retry-after window before a rate-limit retry', async () => {
+  let calls = 0;
+  const waits = [];
+  const client = createAiClient({
+    storage: fakeStorage(),
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    fetchImpl: async () => (++calls === 1
+      ? jsonResponse({ error: { message: 'Please try again in 4.5s' } }, 429, { 'retry-after': '4.5' })
+      : jsonResponse({ choices: [{ message: { content: '{"blocks":[{"type":"sys","text":"连接成功"}]}' } }] }))
+  });
+  await client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext());
+  assert.deepEqual(waits, [4500]);
+});
+
+test('personal AI can follow two rolling rate-limit windows before succeeding', async () => {
+  let calls = 0;
+  const waits = [];
+  const client = createAiClient({
+    storage: fakeStorage(),
+    sleep: async (milliseconds) => { waits.push(milliseconds); },
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return jsonResponse({ error: { message: 'try again in 2s' } }, 429, { 'retry-after': '2' });
+      if (calls === 2) return jsonResponse({ error: { message: 'try again in 0.75s' } }, 429, { 'retry-after': '0.75' });
+      return jsonResponse({ choices: [{ message: { content: '{"blocks":[{"type":"sys","text":"连接成功"}]}' } }] });
+    }
+  });
+  await client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext());
+  assert.deepEqual(waits, [2000, 750]);
 });
 
 test('personal Mistral uses its fixed OpenAI-compatible endpoint', async () => {

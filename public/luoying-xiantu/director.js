@@ -7,6 +7,7 @@ const EFFECT_CAPS = {
   qi: [0, 80], spirit: [-40, 30], hp: [-80, 40], gold: [-100, 100]
 };
 const PROGRESS_PREFIXES = ['opening:', 'scene:', 'chapter:', 'quest:', 'fact:', 'relationship:', 'danger:', 'battle:', 'discovery:'];
+const MIN_WORLD_NARRATIVE_CHARS = 90;
 const AUTHORED_FACTS = {
   'fact:forest-footprints': {
     progressId: 'discovery:forest-footprints',
@@ -19,10 +20,69 @@ const PLAYER_PUPPET_PATTERNS = [
   /你(?:感到|觉得)(?:无比|非常|由衷)?(?:喜悦|幸福|悔恨|忠诚|爱慕|憎恨)/,
   /你说道[：:“\"]|你回答[：:“\"]|你开口(?:答应|拒绝)/
 ];
+const OMNISCIENT_PATTERNS = [
+  /与此同时[^。！？]{0,80}(?:心中|心里|暗自|决定|盘算|想到)/u,
+  /(?:远在|另一边|另一处)[^。！？]{0,80}(?:心中|心里|暗自|决定|盘算|想到)/u,
+  /(?:他|她|此人|那人)(?:其实|早已|正在)?(?:心中|心里|暗自)(?:决定|盘算|想到|发誓)/u,
+  /我所不知道的是|不为我所知/u
+];
+const FIRST_PERSON_DECISIONS = [
+  { output: /我(?:答应|同意)|我[^。！？]{0,30}(?:便|就|于是|随即|当即|立刻|马上|最终|终于|毫不犹豫地)(?:答应|同意)/u, input: /答应|同意/u },
+  { output: /我拒绝|我[^。！？]{0,30}(?:便|就|于是|随即|当即|立刻|马上|最终|终于|明确地)拒绝/u, input: /拒绝/u },
+  { output: /我(?:决定|选择)|我[^。！？]{0,30}(?:便|就|于是|随即|当即|立刻|马上|最终|终于)(?:决定|选择)/u, input: /决定|选择|我要|我去|我用|我先/u },
+  { output: /我(?:承诺|发誓)|我[^。！？]{0,30}(?:便|就|于是|随即|当即|立刻|马上|郑重地)(?:承诺|发誓)/u, input: /承诺|发誓/u },
+  { output: /我(?:加入|背叛)|我[^。！？]{0,30}(?:便|就|于是|随即|当即|立刻|马上|最终)(?:加入|背叛)/u, input: /加入|背叛/u },
+  { output: /我(?:感到|觉得)[^。！？]{0,30}(?:喜悦|幸福|忠诚|爱慕|憎恨)/u, input: /喜悦|幸福|忠诚|爱慕|憎恨|喜欢|讨厌/u },
+  { output: /我(?:说道|回答|开口|告诉|询问|问道|喊道)/u, input: /说|回答|告诉|询问|问|喊/u }
+];
 
 const cleanText = (value, max) => String(value ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, max);
 const cleanId = (value, max = 100) => cleanText(value, max).replace(/[^\p{L}\p{N}_.:/\-]/gu, '');
 const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
+
+function parseStatNumber(value) {
+  const raw = String(value || '');
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  const units = { 十: 10, 百: 100, 千: 1000 };
+  let total = 0;
+  let number = 0;
+  for (const char of raw) {
+    if (Object.hasOwn(digits, char)) number = digits[char];
+    else if (Object.hasOwn(units, char)) {
+      total += (number || 1) * units[char];
+      number = 0;
+    } else return NaN;
+  }
+  return total + number;
+}
+
+function validateNarratedResources(contract, narration, narrationText, errors) {
+  const resourceKey = { 灵气: 'qi', 灵力: 'spirit' };
+  const claims = [];
+  const leading = /(?:还剩|只剩|只有|尚有|剩余|余下|当前(?:有|为)?)[^，。！？]{0,8}?([零〇一二两三四五六七八九十百千\d]+)\s*点?\s*(灵气|灵力)/gu;
+  const trailing = /(灵气|灵力)[^，。！？]{0,8}?(?:还剩|只剩|只有|尚有|剩余|余下|当前(?:有|为)?)[^，。！？]{0,3}?([零〇一二两三四五六七八九十百千\d]+)/gu;
+  for (const match of narrationText.matchAll(leading)) claims.push({ label: match[2], value: parseStatNumber(match[1]) });
+  for (const match of narrationText.matchAll(trailing)) claims.push({ label: match[1], value: parseStatNumber(match[2]) });
+  for (const claim of claims) {
+    const key = resourceKey[claim.label];
+    const before = Number(contract.player[key]);
+    const delta = Number(narration?.effects?.[key] || 0);
+    const after = before + (Number.isFinite(delta) ? delta : 0);
+    if (Number.isFinite(claim.value) && claim.value !== before && claim.value !== after) {
+      errors.push(`${claim.label}数值与场景状态不一致：当前应为 ${before}${after !== before ? `，结算后为 ${after}` : ''}。`);
+    }
+  }
+  const spiritAfter = Number(contract.player.spirit) + Number(narration?.effects?.spirit || 0);
+  if (/灵力[^。！？]{0,12}(?:耗尽|枯竭|空空如也)/u.test(narrationText)
+    && spiritAfter > Number(contract.player.maxSpirit) * 0.25) {
+    errors.push(`灵力状态描述与场景数值不一致：当前为 ${contract.player.spirit}/${contract.player.maxSpirit}。`);
+  }
+  const qiAfter = Number(contract.player.qi) + Number(narration?.effects?.qi || 0);
+  if (/灵气[^。！？]{0,10}(?:充盈|充沛|满溢)/u.test(narrationText) && qiAfter <= 0) {
+    errors.push(`灵气状态描述与场景数值不一致：当前为 ${contract.player.qi}。`);
+  }
+}
 
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
@@ -67,10 +127,13 @@ function authoredActor(name, npc, state) {
   };
 }
 
-function contractActors(state, input) {
+function contractActors(state, input, chapter) {
   const actors = new Map();
   for (const [name, npc] of Object.entries(NPCS)) {
-    if (npc.location === state.story.location || String(input).includes(name) || state.memory.entities[npc.id]?.location === state.story.location) {
+    const chapterNames = `${chapter?.goal || ''}${chapter?.entry || ''}`;
+    const chapterActorIds = Array.isArray(chapter?.actorIds) ? chapter.actorIds : [];
+    if (npc.location === state.story.location || String(input).includes(name) || chapterNames.includes(name)
+      || chapterActorIds.includes(npc.id) || state.memory.entities[npc.id]?.location === state.story.location) {
       actors.set(npc.id, authoredActor(name, npc, state));
     }
   }
@@ -90,7 +153,7 @@ function contractActors(state, input) {
 export function createSceneContract(source, input, turnId) {
   const state = migrateGameState(source, 'ai');
   const chapter = currentChapter(state);
-  const actors = contractActors(state, input);
+  const actors = contractActors(state, input, chapter);
   const actorFactIds = new Set(actors.flatMap((actor) => actor.knownFactIds));
   const rememberedFacts = state.memory.facts
     .filter((fact) => fact.locked || actorFactIds.has(fact.id) || chapter.requiredFacts.includes(fact.id))
@@ -178,6 +241,27 @@ function hasMeaningfulProgress(advanced, narration, contract) {
     if (id.startsWith('relationship:')) return relationshipChanged;
     return id.startsWith('battle:');
   }) || Boolean(narration?.effects?.location);
+}
+
+function hasConcreteProgress(narration, contract) {
+  const progress = narration?.progress && typeof narration.progress === 'object' ? narration.progress : {};
+  const advanced = Array.isArray(progress.advanced) ? progress.advanced.map((id) => cleanId(id)).filter(Boolean) : [];
+  const exitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
+  const recognizedAdvance = advanced.some((id) => id.startsWith('opening:') || exitIds.has(id)
+    || contract.legalQuestIds.some((questId) => id === `quest:${questId}` || id.startsWith(`quest:${questId}:`)));
+  const hasEffect = narration?.effects && Object.entries(narration.effects).some(([, value]) => {
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') return Boolean(value);
+    return value && typeof value === 'object' && Object.keys(value).length > 0;
+  });
+  const hasFact = Array.isArray(narration?.memory?.facts) && narration.memory.facts.length > 0;
+  const hasClockChange = progress.dangerClocks && Object.values(progress.dangerClocks).some((value) => Number(value) !== 0);
+  const opensNewLoop = Array.isArray(progress.openLoops)
+    && progress.openLoops.some((id) => !contract.openLoopIds.includes(cleanId(id)));
+  const resolvesLoop = Array.isArray(progress.resolvedLoops)
+    && progress.resolvedLoops.some((id) => contract.openLoopIds.includes(cleanId(id)));
+  const battleChangedState = advanced.some((id) => id.startsWith('battle:')) && Boolean(hasEffect);
+  return Boolean(recognizedAdvance || battleChangedState || hasEffect || hasFact || hasClockChange || opensNewLoop || resolvesLoop);
 }
 
 function fingerprintFor(narration) {
@@ -288,6 +372,24 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     }
   }
   const allText = blocks.map((block) => cleanText(block?.text, 12_000)).join('');
+  const narrationText = blocks.filter((block) => block?.type === 'narr')
+    .map((block) => cleanText(block.text, 12_000)).join('');
+  if (!narrationText.includes('我') || /你|主角|玩家/u.test(narrationText)) {
+    errors.push('旁白视角错误：narr 必须始终以主角第一人称“我”书写；NPC 对我的“你”只能放在 dlg 对白中。');
+  }
+  if ([...narrationText.replace(/\s/gu, '')].length < MIN_WORLD_NARRATIVE_CHARS) {
+    errors.push(`剧情展开过短：世界回合旁白至少需要 ${MIN_WORLD_NARRATIVE_CHARS} 个字符，并写出行动、反应、结果与新进展。`);
+  }
+  if (OMNISCIENT_PATTERNS.some((pattern) => pattern.test(narrationText))) {
+    errors.push('旁白出现全知视角；只能写“我”亲历、感知或有依据的推断。');
+  }
+  if (/\b(?:qi|spirit|hp|maxHp|maxSpirit|effects|progress|timeCost|factIds|usedFactIdsByActor)\b/iu.test(narrationText)) {
+    errors.push('旁白泄漏了内部字段；可见剧情必须使用灵气、灵力、气血等中文游戏术语。');
+  }
+  if (FIRST_PERSON_DECISIONS.some(({ output, input }) => output.test(narrationText) && !input.test(contract.playerInput))) {
+    errors.push('AI 不得擅自替玩家补写第一人称的选择、承诺、对白或感情。');
+  }
+  validateNarratedResources(contract, narration, narrationText, errors);
   for (const actor of contract.actors.filter((candidate) => candidate.status === 'dead')) {
     const relevant = blocks.map((block) => cleanText(block?.text, 12_000)).filter((text) => text.includes(actor.name));
     const active = relevant.some((text) => /(?:出现|赶来|走|跑|推|挥|攻击|招手|开口|说道|回答|起身|站起|进入|离开)/u.test(text)
@@ -304,6 +406,14 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   const advanced = Array.isArray(progress.advanced) ? progress.advanced.map((id) => cleanId(id)).filter(Boolean) : [];
   if (!advanced.length || advanced.some((id) => !PROGRESS_PREFIXES.some((prefix) => id.startsWith(prefix)))) {
     errors.push('世界回合必须包含至少一项有效进展。');
+  }
+  const consequences = Array.isArray(progress.consequences)
+    ? progress.consequences.map((value) => cleanText(value, 160)).filter(Boolean)
+    : [];
+  const openingTurn = advanced.some((id) => id.startsWith('opening:'));
+  if (!openingTurn && !consequences.length) errors.push('世界回合必须写明行动造成的具体后果。');
+  if (!hasConcreteProgress(narration, contract)) {
+    errors.push('世界回合缺少实际进展：必须改变状态、记忆、危险、悬念、任务或章节，不能只填写装饰性 scene 标签。');
   }
   const chapterExitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
   const advancesChapter = advanced.some((id) => chapterExitIds.has(id));
@@ -342,7 +452,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
 
   const normalizedEffects = validateEffects(contract, narration.effects || {}, errors);
-  const actorById = new Map(contract.actors.map((actor) => [actor.id, actor]));
+  const actorById = new Map(contract.actors.flatMap((actor) => [[actor.id, actor], [actor.name, actor]]));
   for (const [actorId, factIds] of Object.entries(factsByActor)) {
     const actor = actorById.get(actorId);
     if (!actor || !Array.isArray(factIds) || factIds.some((id) => !actor.knownFactIds.includes(id))) {
