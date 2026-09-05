@@ -612,10 +612,12 @@ function syncAiFields(resetModel = false) {
   dom.baseField.hidden = id !== 'custom';
   if (resetModel) dom.modelInput.value = provider.model;
   const siteMode = siteCapable && dom.credentialSelect.value === 'site';
-  dom.modelInput.disabled = siteMode;
-  dom.modelInput.title = siteMode ? '网站模式由 Render 环境变量决定模型；切换到个人 Key 后可自选模型。' : '';
+  dom.modelInput.disabled = false;
+  dom.modelInput.title = siteMode
+    ? `网站模式可切换允许的模型：${(provider.models || [provider.model]).join('、')}`
+    : '';
   dom.baseUrlInput.value = provider.baseUrl || '';
-  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式的模型由部署配置统一决定。' : ''}`;
+  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式可切换允许的模型，默认值由部署配置决定。' : ''}`;
 }
 
 function openAiDialog() {

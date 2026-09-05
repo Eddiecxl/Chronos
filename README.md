@@ -74,7 +74,7 @@ GROQ_MODEL=openai/gpt-oss-120b
 MISTRAL_API_KEY=...
 MISTRAL_MODEL=mistral-small-latest
 GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-3.5-flash
+GEMINI_MODEL=gemini-3.6-flash
 ```
 
 Any provider without a configured server key is safely disabled while the other providers and local mode remain usable. The server accepts only the supported site-provider identifiers, bounds request sizes, rate-limits each account, applies a 45-second timeout, and returns generic errors without exposing provider response bodies or credentials.

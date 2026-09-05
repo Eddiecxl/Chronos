@@ -40,8 +40,36 @@ test('Groq uses the fixed official endpoint and configured production model', as
   const result = await service.generate('player', validRequest('groq'));
   assert.equal(calls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
   assert.equal(JSON.parse(calls[0].options.body).model, 'openai/gpt-oss-120b');
+  assert.deepEqual(JSON.parse(calls[0].options.body).response_format, { type: 'json_object' });
   assert.equal(result.model, 'openai/gpt-oss-120b');
   assert.ok(!JSON.stringify(result).includes('secret'));
+});
+
+test('site Groq accepts a supported model switch without changing providers', async () => {
+  const calls = [];
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret', GROQ_MODEL: 'openai/gpt-oss-120b' },
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      return jsonResponse({ choices: [{ message: { content: '结果' } }] });
+    }
+  });
+  const result = await service.generate('player', {
+    ...validRequest('groq'), model: 'openai/gpt-oss-20b'
+  });
+  assert.equal(calls[0].model, 'openai/gpt-oss-20b');
+  assert.equal(result.model, 'openai/gpt-oss-20b');
+});
+
+test('site proxy rejects models outside its provider allowlist', async () => {
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' },
+    fetchImpl: async () => jsonResponse({ choices: [{ message: { content: '不应调用' } }] })
+  });
+  await assert.rejects(
+    service.generate('player', { ...validRequest('groq'), model: 'untrusted/expensive-model' }),
+    (error) => error.code === 'AI_BAD_REQUEST' && error.status === 400
+  );
 });
 
 test('Mistral uses the fixed official endpoint', async () => {
@@ -69,6 +97,20 @@ test('Gemini uses its fixed endpoint and extracts candidate text', async () => {
   const result = await service.generate('player', validRequest('gemini'));
   assert.match(calls[0].url, /^https:\/\/generativelanguage\.googleapis\.com\/v1beta\/models\/gemini-3\.5-flash:generateContent$/);
   assert.equal(result.text, '星光落下。');
+});
+
+test('Gemini site mode defaults to Gemini 3.6 Flash', async () => {
+  const calls = [];
+  const service = createGameAiService({
+    env: { GEMINI_API_KEY: 'secret' },
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return jsonResponse({ candidates: [{ content: { parts: [{ text: '樱花落下。' }] } }] });
+    }
+  });
+  const result = await service.generate('player', validRequest('gemini'));
+  assert.match(calls[0], /\/gemini-3\.6-flash:generateContent$/);
+  assert.equal(result.model, 'gemini-3.6-flash');
 });
 
 test('missing site credentials return a stable non-secret error code', async () => {

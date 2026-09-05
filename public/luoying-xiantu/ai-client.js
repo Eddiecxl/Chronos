@@ -4,15 +4,17 @@ const SESSION_KEY = 'chronos-session-token-v1';
 export const PROVIDERS = {
   groq: {
     label: 'Groq · GPT-OSS', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1',
-    credentialMode: 'site', recommended: true, tip: '高速长文本叙事；可用 Chronos 网站额度或自己的 Groq Key。'
+    credentialMode: 'site', recommended: true, tip: '高速长文本叙事；可用 Chronos 网站额度或自己的 Groq Key。',
+    models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b', 'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b']
   },
   mistral: {
     label: 'Mistral', model: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1',
     credentialMode: 'site', recommended: true, tip: '稳定、节奏明快；可用网站额度或自己的 Mistral Key。'
   },
   gemini: {
-    label: 'Google Gemini', model: 'gemini-3.5-flash', credentialMode: 'site', advanced: true,
-    tip: '保留的高级选项；支持网站额度或个人 Google AI Studio Key。'
+    label: 'Google Gemini', model: 'gemini-3.6-flash', credentialMode: 'site', advanced: true,
+    tip: '稳定长上下文叙事；支持网站额度或个人 Google AI Studio Key。',
+    models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']
   },
   siliconflow: {
     label: 'SiliconFlow · Qwen', model: 'Qwen/Qwen2.5-7B-Instruct', baseUrl: 'https://api.siliconflow.cn/v1',
@@ -289,7 +291,10 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
       const data = await requestJson(fetchImpl, `${settings.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.key}` },
-        body: JSON.stringify({ model: settings.model, messages, temperature: 0.85, max_tokens: 1800 })
+        body: JSON.stringify({
+          model: settings.model, messages, temperature: 0.85, max_tokens: 1800,
+          ...(settings.provider === 'groq' ? { response_format: { type: 'json_object' } } : {})
+        })
       });
       return extractOpenAi(data);
     },

@@ -32,6 +32,23 @@ test('Groq defaults to its production GPT OSS model', () => {
   assert.equal(PROVIDERS.groq.model, 'openai/gpt-oss-120b');
 });
 
+test('Gemini defaults to the stable 3.6 Flash model', () => {
+  assert.equal(PROVIDERS.gemini.model, 'gemini-3.6-flash');
+});
+
+test('personal Groq requests JSON object mode for reliable game turns', async () => {
+  const calls = [];
+  const client = createAiClient({
+    storage: fakeStorage(),
+    fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body));
+      return jsonResponse({ choices: [{ message: { content: '{"blocks":[{"type":"sys","text":"连接成功"}]}' } }] });
+    }
+  });
+  await client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext());
+  assert.deepEqual(calls[0].response_format, { type: 'json_object' });
+});
+
 test('personal Mistral uses its fixed OpenAI-compatible endpoint', async () => {
   const calls = [];
   const client = createAiClient({

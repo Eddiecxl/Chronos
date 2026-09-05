@@ -1,15 +1,24 @@
 const PROVIDER_CONFIG = {
   groq: {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
-    keyName: 'GROQ_API_KEY', modelName: 'GROQ_MODEL', defaultModel: 'openai/gpt-oss-120b', protocol: 'openai'
+    keyName: 'GROQ_API_KEY', modelName: 'GROQ_MODEL', defaultModel: 'openai/gpt-oss-120b', protocol: 'openai',
+    allowedModels: [
+      'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b',
+      'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b'
+    ]
   },
   mistral: {
     endpoint: 'https://api.mistral.ai/v1/chat/completions',
-    keyName: 'MISTRAL_API_KEY', modelName: 'MISTRAL_MODEL', defaultModel: 'mistral-small-latest', protocol: 'openai'
+    keyName: 'MISTRAL_API_KEY', modelName: 'MISTRAL_MODEL', defaultModel: 'mistral-small-latest', protocol: 'openai',
+    allowedModels: ['mistral-small-latest']
   },
   gemini: {
     endpoint: 'https://generativelanguage.googleapis.com/v1beta/models',
-    keyName: 'GEMINI_API_KEY', modelName: 'GEMINI_MODEL', defaultModel: 'gemini-3.5-flash', protocol: 'gemini'
+    keyName: 'GEMINI_API_KEY', modelName: 'GEMINI_MODEL', defaultModel: 'gemini-3.6-flash', protocol: 'gemini',
+    allowedModels: [
+      'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash',
+      'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'
+    ]
   }
 };
 
@@ -76,8 +85,11 @@ function rateLimiter(now) {
   };
 }
 
-function openAiBody(model, messages) {
-  return { model, messages, temperature: 0.85, max_tokens: 1_800 };
+function openAiBody(model, messages, jsonMode = false) {
+  return {
+    model, messages, temperature: 0.85, max_tokens: 1_800,
+    ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
+  };
 }
 
 function geminiBody(messages) {
@@ -122,11 +134,17 @@ export function createGameAiService({ fetchImpl = globalThis.fetch, env = proces
       const config = PROVIDER_CONFIG[request.provider];
       const key = cleanText(env[config.keyName], 1_000);
       if (!key) throw new GameAiError('这个网站 AI 提供商尚未配置。', 'AI_NOT_CONFIGURED', 503);
-      const model = cleanText(env[config.modelName] || config.defaultModel, 140);
+      const configuredModel = cleanText(env[config.modelName] || config.defaultModel, 140);
+      const model = request.model || configuredModel;
+      if (model !== configuredModel && !config.allowedModels.includes(model)) {
+        throw new GameAiError('网站模式不支持这个模型，请选择该提供商的允许模型。', 'AI_BAD_REQUEST', 400);
+      }
       const url = config.protocol === 'gemini'
         ? `${config.endpoint}/${encodeURIComponent(model)}:generateContent`
         : config.endpoint;
-      const body = config.protocol === 'gemini' ? geminiBody(request.messages) : openAiBody(model, request.messages);
+      const body = config.protocol === 'gemini'
+        ? geminiBody(request.messages)
+        : openAiBody(model, request.messages, request.provider === 'groq');
       const headers = {
         'Content-Type': 'application/json',
         ...(config.protocol === 'gemini' ? { 'x-goog-api-key': key } : { Authorization: `Bearer ${key}` })
