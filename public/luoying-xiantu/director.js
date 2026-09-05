@@ -130,7 +130,7 @@ export function classifyChapterProgress(narration, contract) {
   if (advanced.some((id) => exitIds.has(id))) return 'chapter';
 
   const questAdvanced = Array.isArray(narration?.effects?.addQuests)
-    && narration.effects.addQuests.some((id) => contract.legalQuestIds.includes(id) && !contract.activeQuestIds.includes(id));
+    && narration.effects.addQuests.some((id) => contract.legalQuestIds.includes(id) && !contract.knownQuestIds.includes(id));
   const requiredDiscovery = advanced.some((id) => contract.pace.requiredProgressIds.includes(id));
   const clockChanged = [...effectiveClockDeltas(contract, narration).values()].some((delta) => delta !== 0);
   const resolvedCurrentLoop = Array.isArray(narration?.progress?.resolvedLoops)
@@ -241,6 +241,9 @@ export function createSceneContract(source, input, turnId) {
     legalLocations: unlockedLocations,
     legalQuestIds: Object.keys(QUESTS),
     activeQuestIds: state.quests.active.map((quest) => quest.id),
+    knownQuestIds: [...new Set([
+      ...state.quests.active.map((quest) => quest.id), ...state.quests.completed, ...state.quests.failed
+    ])],
     legalRelationshipIds: Object.keys(NPCS),
     effectCaps: structuredClone(EFFECT_CAPS),
     requiredProgressCategories: [...PROGRESS_PREFIXES],
@@ -481,7 +484,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (contract.pace.level >= 2 && (!consequences.length || progressKind === 'minor')) {
     errors.push('局势已停滞，必须通过自然事件产生主线后果。');
   }
-  if (contract.pace.level >= 3 && !advancesChapter
+  if (contract.pace.level >= 3
     && (!advanced.includes(contract.pace.opportunityId) || !consequences.length)) {
     errors.push('必须自然呈现当前章节的决定性机会及其因果后果，并停在玩家选择前。');
   }

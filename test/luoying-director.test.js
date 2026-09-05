@@ -137,6 +137,23 @@ test('decisive pressure accepts a chapter opportunity without auto-exiting', () 
   assert.equal(next.director.chapterId, 'act2-forest-signs');
 });
 
+test('decisive pressure rejects a markerless chapter exit but accepts opportunity plus exit', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 8;
+  const contract = createSceneContract(state, '我把证据交给执事', 'turn-decisive-exit');
+  const narration = narrationWithText('我把封好的证物递到执事案前，堂外的封锁令也随之传开。');
+  narration.progress = {
+    advanced: ['chapter:act2-forest-signs:complete'], consequences: ['宗门开始封锁后山'],
+    openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
+  };
+  const markerless = validateAiWorldTurn(state, contract, narration);
+  assert.equal(markerless.ok, false);
+  assert.ok(markerless.errors.some((error) => /决定性机会/.test(error)));
+
+  narration.progress.advanced.unshift(contract.pace.opportunityId);
+  assert.equal(validateAiWorldTurn(state, contract, narration).ok, true);
+});
+
 test('exitless final chapter remains playable under decisive pressure', () => {
   const state = seededAiState();
   state.director.chapterId = 'act5-tribulation';
@@ -175,6 +192,23 @@ test('arbitrary and repeated quest tags do not reset chapter momentum', () => {
   const committed = commitValidatedWorldTurn(state, contract, started);
   const repeatedContract = createSceneContract(committed, '我再看一眼铜扣', 'turn-quest-repeat');
   assert.equal(validateAiWorldTurn(committed, repeatedContract, started).ok, false);
+});
+
+test('completed quests cannot be re-added as material chapter progress', () => {
+  const state = seededAiState();
+  state.director.turnsSinceChapterProgress = 2;
+  state.quests.completed = ['herb-basket'];
+  const contract = createSceneContract(state, '我翻看旧药篓', 'turn-completed-quest');
+  const narration = narrationWithText('我翻出一张旧药方，内容与已经办完的药篓差事没有新的联系。');
+  narration.progress = {
+    advanced: ['quest:herb-basket:clue'], consequences: ['我确认药篓差事已经结束'],
+    openLoops: ['loop:old-basket'], resolvedLoops: [], dangerClocks: {}
+  };
+  narration.effects = { addQuests: ['herb-basket'] };
+  narration.timeCost = 'instant';
+  const result = validateAiWorldTurn(state, contract, narration);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /当前章节目标/.test(error)));
 });
 
 test('decisive pressure rejects decorative progress and asks for a natural route forward', () => {
