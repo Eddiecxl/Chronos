@@ -68,29 +68,118 @@ test('scene contracts carry a goal danger clock and NPC knowledge', () => {
     stalledTurns: 0,
     instruction: '允许围绕当前目标进行有意义的探索。',
     requiredProgressIds: [],
-    requirementsSatisfied: true
+    requirementsSatisfied: true,
+    opportunityId: 'opportunity:act2-forest-signs'
   });
   assert.equal(Object.isFrozen(contract), true);
   assert.equal(Object.isFrozen(contract.actors), true);
 });
 
-test('minor discoveries do not reset stalled chapter momentum', () => {
+test('gentle pressure rejects a concrete but chapter-minor discovery', () => {
   const state = seededAiState();
-  state.director.turnsSinceChapterProgress = 4;
+  state.director.turnsSinceChapterProgress = 2;
   const contract = createSceneContract(state, '我继续检查树叶', 'turn-pace');
   const narration = narrationWithText('我发现一片与主线无关的新叶痕。');
   narration.progress.advanced = ['scene:leaf-mark'];
   narration.progress.dangerClocks = {};
   narration.memory.facts = [{ subjectId: 'world:leaf', predicate: 'color', object: '叶缘发黄', confidence: 1 }];
+  narration.timeCost = 'instant';
+  const result = validateAiWorldTurn(state, contract, narration);
+  assert.equal(contract.pace.level, 1);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /当前章节目标/.test(error)));
+});
+
+test('implicit danger clock movement is material chapter progress', () => {
+  const state = seededAiState();
+  state.director.turnsSinceChapterProgress = 1;
+  const contract = createSceneContract(state, '我沿石径追查', 'turn-implicit-clock');
+  const narration = narrationWithText('我沿着被雨水冲开的石径追查，远处的灯火随之逼近。');
+  narration.progress.dangerClocks = {};
   const next = commitValidatedWorldTurn(state, contract, narration);
-  assert.equal(next.director.chapterTurns, 1);
-  assert.equal(next.director.turnsSinceChapterProgress, 5);
-  assert.equal(next.director.pacePressure, 2);
+  assert.equal(next.director.turnsSinceChapterProgress, 0);
+});
+
+test('chapter turns create reachable pressure even when material progress resets stalls', () => {
+  let state = seededAiState();
+  state.director.chapterId = 'act5-tribulation';
+  state.story.act = 5;
+  state.director.dangerClocks = { tribulation: 0 };
+  for (let index = 0; index < 8; index += 1) {
+    const contract = createSceneContract(state, '我稳住脚步观察雷云', `turn-escalation-${index}`);
+    const narration = narrationWithText('我望见雷云压低，石台边缘开始落下细碎的电光。');
+    narration.blocks[0].text += `${'甲乙丙丁戊己庚辛'.at(index).repeat(140)}`;
+    narration.progress = {
+      advanced: ['danger:tribulation:pressure'], consequences: ['雷云继续压低'],
+      openLoops: [], resolvedLoops: [], dangerClocks: { tribulation: 1 }
+    };
+    state = commitValidatedWorldTurn(state, contract, narration);
+  }
+  const decisive = createSceneContract(state, '我停在飞升台边缘观察变化', 'turn-escalation-decisive');
+  assert.equal(state.director.turnsSinceChapterProgress, 0);
+  assert.equal(state.director.chapterTurns, 8);
+  assert.equal(decisive.pace.level, 3);
+});
+
+test('decisive pressure accepts a chapter opportunity without auto-exiting', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 8;
+  const contract = createSceneContract(state, '我观察戒律堂外的动静', 'turn-opportunity');
+  const narration = narrationWithText('我看见执事把后山封锁令放在案边，门外正好留出一条能递交证物的空隙。');
+  narration.progress = {
+    advanced: ['opportunity:act2-forest-signs'], consequences: ['递交证物的时机已经出现'],
+    openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
+  };
+  const result = validateAiWorldTurn(state, contract, narration);
+  assert.equal(contract.pace.level, 3);
+  assert.equal(result.ok, true);
+  const next = commitValidatedWorldTurn(state, contract, narration);
+  assert.equal(next.director.chapterId, 'act2-forest-signs');
+});
+
+test('exitless final chapter remains playable under decisive pressure', () => {
+  const state = seededAiState();
+  state.director.chapterId = 'act5-tribulation';
+  state.story.act = 5;
+  state.director.chapterTurns = 8;
+  state.director.dangerClocks = { tribulation: 0 };
+  const contract = createSceneContract(state, '我听着雷云的变化', 'turn-final-opportunity');
+  const narration = narrationWithText('我看见雷云在台阶尽头短暂裂开，露出一条尚未落雷的登台石路。');
+  narration.progress = {
+    advanced: ['opportunity:act5-tribulation'], consequences: ['一条登台石路短暂显现'],
+    openLoops: [], resolvedLoops: [], dangerClocks: { tribulation: 1 }
+  };
+  assert.equal(contract.chapter.exits.length, 0);
+  assert.equal(validateAiWorldTurn(state, contract, narration).ok, true);
+});
+
+test('arbitrary and repeated quest tags do not reset chapter momentum', () => {
+  const state = seededAiState();
+  state.director.turnsSinceChapterProgress = 2;
+  const contract = createSceneContract(state, '我检查樱林边缘', 'turn-quest-tag');
+  const narration = narrationWithText('我在湿泥中找到一枚普通铜扣，暂时没有新的主线线索。');
+  narration.progress = {
+    advanced: ['quest:herb-basket:clue'], consequences: ['我记下铜扣的位置'],
+    openLoops: ['loop:quest-copper'], resolvedLoops: [], dangerClocks: {}
+  };
+  narration.timeCost = 'instant';
+  const rejected = validateAiWorldTurn(state, contract, narration);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.errors.some((error) => /当前章节目标/.test(error)));
+
+  const started = {
+    ...narration,
+    effects: { addQuests: ['herb-basket'] }
+  };
+  assert.equal(validateAiWorldTurn(state, contract, started).ok, true);
+  const committed = commitValidatedWorldTurn(state, contract, started);
+  const repeatedContract = createSceneContract(committed, '我再看一眼铜扣', 'turn-quest-repeat');
+  assert.equal(validateAiWorldTurn(committed, repeatedContract, started).ok, false);
 });
 
 test('decisive pressure rejects decorative progress and asks for a natural route forward', () => {
   const state = seededAiState();
-  state.director.turnsSinceChapterProgress = 8;
+  state.director.chapterTurns = 8;
   const contract = createSceneContract(state, '我观察四周', 'turn-decisive');
   const result = validateAiWorldTurn(state, contract, narrationWithText('我又发现一处无关划痕。'), []);
   assert.equal(contract.pace.level, 3);

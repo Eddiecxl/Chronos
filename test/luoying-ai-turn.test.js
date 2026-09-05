@@ -142,6 +142,9 @@ test('AI journey opening contains only model-authored story blocks', async () =>
   assert.equal(result.ok, true);
   assert.deepEqual(requestTypes, ['world']);
   assert.match(result.blocks[0].text, /冷雨/);
+  assert.equal(result.state.director.chapterTurns, 0);
+  assert.equal(result.state.director.turnsSinceChapterProgress, 0);
+  assert.equal(result.state.director.pacePressure, 0);
 });
 
 test('successful turns persist transcript facts and generated entities only after commit', async () => {
