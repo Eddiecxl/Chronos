@@ -1,6 +1,6 @@
 import { createGameState } from './game-state.js';
 import {
-  ACHIEVEMENTS, ENDINGS, ITEMS, LOCATIONS, NPCS, QUESTS, REALMS, STORY_SCENES, TECHNIQUES,
+  ITEMS, REALMS,
   dispatchLocalChoice, getAvailableActions, getLocalPanelActions
 } from './game-engine.js';
 import { createStorage } from './storage.js';
@@ -8,6 +8,10 @@ import { createTranscriptStore } from './transcript-store.js';
 import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
 import { createAiTurnRunner } from './ai-turn.js';
 import { classifyTurn } from './turn-router.js';
+import { EQUIPMENT_SLOT_ORDER, equipOwnedItem } from './equipment.js';
+import {
+  buildCharacterView, buildCodexView, buildHistoryView, buildInventoryView, buildMapView, buildQuestView
+} from './panel-view.js';
 
 const byId = (id) => document.getElementById(id);
 const dom = Object.fromEntries([
@@ -43,6 +47,7 @@ let channel = 'world';
 let activePanel = 'character';
 let historyVisible = 30;
 let pending = false;
+let equipmentPending = false;
 let retryContext = null;
 let aiSettings = aiClient.loadSettings();
 let runtimeKey = '';
@@ -155,6 +160,11 @@ function renderModeControls() {
   dom.aiButton.hidden = false;
   if (mode === 'local') renderLocalChoices();
   updateChannelUi();
+}
+
+function setEquipmentPending(value) {
+  equipmentPending = value;
+  for (const button of dom.panelContent.querySelectorAll('[data-equipment-item]')) button.disabled = value;
 }
 
 function updateChannelUi() {
@@ -363,41 +373,160 @@ function panelCard(title, lines, className = '') {
   return card;
 }
 
+const SLOT_LABELS = Object.freeze({
+  head: '头饰', neck: '颈饰', body: '躯干', arms: '护臂', hands: '手持', legs: '腿甲', feet: '鞋履'
+});
+
+const statText = (item) => [
+  item?.attack ? `攻击加${item.attack}` : '', item?.defense ? `防御加${item.defense}` : '',
+  item?.spirit ? `灵力上限加${item.spirit}` : ''
+].filter(Boolean).join('，');
+
+function vitalMeter(label, value, max, kind) {
+  const meter = node('section', `vital-meter ${kind}`);
+  const heading = node('header');
+  heading.append(node('span', '', label), node('b', '', `${value}/${max}`));
+  const rail = node('div', 'vital-rail');
+  const fill = node('i');
+  fill.style.width = `${Math.max(0, Math.min(100, Number(value) / Math.max(1, Number(max)) * 100))}%`;
+  rail.append(fill);
+  meter.append(heading, rail);
+  return meter;
+}
+
+function attributeTile(label, value, detail) {
+  const tile = node('section', 'attribute-tile');
+  tile.append(node('small', '', label), node('strong', '', String(value)));
+  if (detail) tile.append(node('span', '', detail));
+  return tile;
+}
+
+function itemForSlot(stateToRender, slot) {
+  return buildInventoryView(stateToRender).find((item) => ITEMS[item.name]?.slot === slot && item.amount > 0) || null;
+}
+
+function equipmentSlot(view, slot) {
+  const itemName = view.slots[slot];
+  const equipped = itemName ? ITEMS[itemName] : null;
+  const replacement = mode === 'ai' ? itemForSlot(state, slot) : null;
+  const className = `equipment-slot rarity-${equipped?.rarity || 'empty'}`;
+  const label = SLOT_LABELS[slot];
+  const description = equipped ? `${label}：${itemName}${statText(equipped) ? `，${statText(equipped)}` : ''}` : `${label}：未装备`;
+  const element = replacement && replacement.name !== itemName ? node('button', className) : node('section', className);
+  if (element.tagName === 'BUTTON') {
+    element.type = 'button';
+    element.dataset.equipmentItem = replacement.name;
+    element.disabled = equipmentPending;
+    element.addEventListener('click', () => saveAiEquipment(replacement.name));
+    element.setAttribute('aria-label', `${description}。装备 ${replacement.name}${statText(replacement) ? `，${statText(replacement)}` : ''}`);
+  } else {
+    element.setAttribute('aria-label', description);
+  }
+  element.dataset.slot = slot;
+  element.append(node('small', '', label), node('strong', '', itemName || '未装备'));
+  if (replacement && replacement.name !== itemName) element.append(node('span', 'equip-prompt', `换上 ${replacement.name}`));
+  else if (equipped && statText(equipped)) element.append(node('span', '', statText(equipped)));
+  return element;
+}
+
+function paperDoll(view) {
+  const doll = node('section', 'paper-doll');
+  doll.setAttribute('aria-label', `${view.name}的七槽装备构筑`);
+  const silhouette = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  silhouette.setAttribute('class', 'doll-silhouette');
+  silhouette.setAttribute('viewBox', '0 0 220 430');
+  silhouette.setAttribute('aria-hidden', 'true');
+  const shapes = [
+    ['circle', { cx: '110', cy: '58', r: '35' }], ['path', { d: 'M78 104 Q110 86 142 104 L164 215 L137 238 L138 371 L82 371 L83 238 L56 215Z' }],
+    ['path', { d: 'M83 130 L37 230 L61 242 L100 171Z' }], ['path', { d: 'M137 130 L183 230 L159 242 L120 171Z' }],
+    ['path', { d: 'M83 367 L70 412 L100 412 L108 367Z' }], ['path', { d: 'M137 367 L150 412 L120 412 L112 367Z' }]
+  ];
+  for (const [tag, attributes] of shapes) {
+    const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const [name, value] of Object.entries(attributes)) shape.setAttribute(name, value);
+    silhouette.append(shape);
+  }
+  doll.append(silhouette);
+  for (const slot of EQUIPMENT_SLOT_ORDER) doll.append(equipmentSlot(view, slot));
+  return doll;
+}
+
+async function saveAiEquipment(itemName) {
+  if (equipmentPending || mode !== 'ai' || !state) return;
+  const original = state;
+  setEquipmentPending(true);
+  try {
+    const candidate = equipOwnedItem(original, itemName, 'ai');
+    state = await storage.saveAutoIfJourney('ai', candidate, original.journeyId, original.revision);
+    renderTopbar();
+    await renderPanel(activePanel);
+    showToast(`${itemName}已装备。此操作未推进世界时间。`);
+  } catch (error) {
+    state = original;
+    showToast(error?.message || '装备没有保存。');
+    await renderPanel(activePanel);
+  } finally {
+    setEquipmentPending(false);
+  }
+}
+
 function renderCharacterPanel() {
-  const grid = node('div', 'panel-grid');
-  const realm = REALMS[state.player.realm];
-  grid.append(panelCard('道途', [
-    `${state.player.name} · ${realm.name}`,
-    `气血 ${state.player.hp}/${state.player.maxHp} · 灵气 ${state.player.qi}/${realm.need}`,
-    `灵力 ${state.player.spirit}/${state.player.maxSpirit} · 灵石 ${state.player.gold}`
-  ]));
-  grid.append(panelCard('攻守', [
-    `攻击 ${state.player.attack} · 防御 ${state.player.defense}`,
-    `武器 ${state.equipment.weapon || '无'} · 护甲 ${state.equipment.armor || '无'} · 配饰 ${state.equipment.accessory || '无'}`
-  ]));
-  grid.append(panelCard('所学功法', state.techniques.known.map((name) => {
-    const art = TECHNIQUES[name];
-    return art ? `《${name}》· 灵力 ${art.cost} · ${art.description}` : name;
-  }), 'wide'));
-  grid.append(panelCard('人物关系', Object.entries(state.relationships).map(([name, value]) => `${name} ${value >= 0 ? '+' : ''}${value}`), 'wide'));
-  dom.panelContent.append(grid);
+  const view = buildCharacterView(state);
+  const sheet = node('div', 'character-sheet');
+  const stats = node('aside', 'character-stats');
+  stats.append(node('p', 'character-kicker', `${view.name} · ${view.realm}`));
+  stats.append(vitalMeter('气血', view.hp, view.maxHp, 'hp'));
+  stats.append(vitalMeter('灵气', view.qi, view.qiNeed, 'qi'));
+  stats.append(vitalMeter('法术灵力', view.spirit, view.maxSpirit, 'spirit'));
+  const attributes = node('div', 'attribute-grid');
+  attributes.append(attributeTile('攻击', view.stats.attack, '本命与装备'), attributeTile('防御', view.stats.defense, '护体与装备'));
+  stats.append(attributes);
+  sheet.append(stats, paperDoll(view));
+  dom.panelContent.append(sheet);
+
+  if (view.techniques.length) {
+    const techniques = node('section', 'panel-card technique-card');
+    techniques.append(node('h3', '', '所学功法'));
+    for (const art of view.techniques) techniques.append(node('p', '', `《${art.name}》· 灵力 ${art.cost} · ${art.description}`));
+    dom.panelContent.append(techniques);
+  }
+  if (view.relationships.length) {
+    const relations = node('section', 'panel-card relationship-section');
+    relations.append(node('h3', '', '人物关系'));
+    const list = node('div', 'relationship-list');
+    for (const person of view.relationships) {
+      const card = node('article', 'relationship-card');
+      card.append(node('strong', '', person.name), node('span', '', person.role), node('b', '', `${person.value >= 0 ? '+' : ''}${person.value}`));
+      list.append(card);
+    }
+    relations.append(list);
+    dom.panelContent.append(relations);
+  }
 }
 
 function renderQuestPanel() {
-  if (!state.quests.active.length) dom.panelContent.append(panelCard('暂无进行中任务', ['世界行动会继续牵动主线与支线。'], 'wide'));
-  for (const entry of state.quests.active) {
-    const quest = QUESTS[entry.id];
-    const card = node('section', 'quest-card');
-    card.append(node('h3', '', `${quest?.type === 'main' ? '主线' : '支线'} · ${quest?.title || entry.id}`));
-    card.append(node('p', '', quest?.description || ''));
-    card.append(node('p', '', `进度 ${entry.progress}/${entry.target}`));
-    const progress = node('div', 'progress');
-    const bar = node('i');
-    bar.style.width = `${Math.min(100, entry.progress / entry.target * 100)}%`;
-    progress.append(bar);
-    card.append(progress);
-    dom.panelContent.append(card);
+  const view = buildQuestView(state);
+  const labels = { active: '进行中', completed: '已完成', failed: '已失败' };
+  for (const [status, entries] of Object.entries(view)) {
+    if (!entries.length) continue;
+    const section = node('section', 'quest-section');
+    section.append(node('h3', '', labels[status]));
+    for (const quest of entries) {
+      const card = node('article', 'quest-card');
+      card.append(node('h4', '', `${quest.type === 'main' ? '主线' : '支线'} · ${quest.title}`), node('p', '', quest.description));
+      if (status === 'active') {
+        card.append(node('p', '', `进度 ${quest.progress}/${quest.target}`));
+        const progress = node('div', 'progress');
+        const bar = node('i');
+        bar.style.width = `${Math.min(100, quest.progress / quest.target * 100)}%`;
+        progress.append(bar);
+        card.append(progress);
+      }
+      section.append(card);
+    }
+    dom.panelContent.append(section);
   }
+  if (!dom.panelContent.childElementCount) dom.panelContent.append(panelCard('暂无任务记录', ['新的因果会在真正发生后留下痕迹。'], 'wide'));
 }
 
 function actionButton(action) {
@@ -413,12 +542,12 @@ function actionButton(action) {
 function renderInventoryPanel() {
   const grid = node('div', 'inventory-grid');
   const actions = mode === 'local' ? getLocalPanelActions(state, 'inventory') : [];
-  for (const [name, amount] of Object.entries(state.inventory.items).filter(([, count]) => count > 0)) {
-    const item = ITEMS[name];
+  for (const item of buildInventoryView(state)) {
+    const { name, amount } = item;
     const card = node('section', 'inventory-card');
     const heading = node('header');
     heading.append(node('h3', '', name), node('b', '', `×${amount}`));
-    card.append(heading, node('p', '', item?.description || '尚未录入图鉴。'));
+    card.append(heading, node('p', '', item.description));
     const action = actions.find((candidate) => candidate.id.endsWith(`:${name}`));
     if (action) card.append(actionButton(action));
     grid.append(card);
@@ -436,11 +565,11 @@ function renderInventoryPanel() {
 function renderMapPanel() {
   const grid = node('div', 'map-grid');
   const actions = mode === 'local' ? getLocalPanelActions(state, 'travel') : [];
-  for (const [name, location] of Object.entries(LOCATIONS)) {
-    const unlocked = state.story.act >= location.act && state.player.realm >= location.realm;
-    const card = node('section', `map-card${unlocked ? '' : ' locked'}`);
-    card.append(node('h3', '', `${location.icon} ${name}${name === state.story.location ? ' · 当前' : ''}`));
-    card.append(node('p', '', unlocked ? location.description : `需要第 ${location.act} 幕、${REALMS[location.realm].name}`));
+  for (const location of buildMapView(state)) {
+    const { name } = location;
+    const card = node('section', 'map-card');
+    card.append(node('h3', '', `${location.icon} ${name}${location.current ? ' · 当前' : ''}`));
+    card.append(node('p', '', location.description));
     const action = actions.find((candidate) => candidate.id === `travel:${name}`);
     if (action) card.append(actionButton(action));
     grid.append(card);
@@ -449,16 +578,17 @@ function renderMapPanel() {
 }
 
 function renderCodexPanel() {
+  const view = buildCodexView(state);
   const grid = node('div', 'codex-grid');
-  grid.append(panelCard('人物', state.codex.characters.length ? state.codex.characters.map((name) => `${name} · ${NPCS[name]?.role || '旅途相逢'}`) : ['尚未结识']));
-  grid.append(panelCard('地点', state.codex.locations.length ? state.codex.locations : ['尚未踏足']));
-  grid.append(panelCard('物品', state.codex.items.length ? state.codex.items : ['尚无记录']));
-  grid.append(panelCard('成就', state.achievements.unlocked.length
-    ? state.achievements.unlocked.map((id) => ACHIEVEMENTS[id]?.title || id)
-    : [`0/${Object.keys(ACHIEVEMENTS).length} · 尚待落笔`]));
-  grid.append(panelCard('结局', state.endings.unlocked.length
-    ? state.endings.unlocked.map((id) => ENDINGS[id]?.title || id)
-    : ['五种结局仍藏在命数之后']), 'wide');
+  const sections = [
+    ['人物', view.characters.map((entry) => `${entry.name} · ${entry.role}`)],
+    ['地点', view.locations.map((entry) => entry.name)],
+    ['物品', view.items.map((entry) => `${entry.name} · ${entry.description}`)],
+    ['成就', view.achievements.map((entry) => `${entry.title} · ${entry.description}`)],
+    ['结局', view.endings.map((entry) => `${entry.title} · ${entry.description}`)]
+  ];
+  for (const [title, lines] of sections) if (lines.length) grid.append(panelCard(title, lines));
+  if (!grid.childElementCount) grid.append(panelCard('图鉴尚未落笔', ['亲历的人、地与物会在此留下记录。']));
   dom.panelContent.append(grid);
 }
 
@@ -468,7 +598,14 @@ async function renderHistoryPanel() {
   const turns = await transcriptStore.allTurns(state.journeyId);
   marker.remove();
   const shown = turns.slice(-historyVisible);
-  if (!shown.length) return dom.panelContent.append(panelCard('尚无记录', ['成功的回合才会写进这里。失败的 AI 请求不会留下半句。']));
+  const history = buildHistoryView(state);
+  if (!shown.length && !history.summaries.length && !history.facts.length) return dom.panelContent.append(panelCard('尚无记录', ['成功的回合才会写进这里。失败的 AI 请求不会留下半句。']));
+  if (history.summaries.length || history.facts.length) {
+    const traces = node('section', 'panel-card history-traces');
+    traces.append(node('h3', '', '已知脉络'));
+    for (const line of [...history.summaries, ...history.facts]) traces.append(node('p', '', String(line)));
+    dom.panelContent.append(traces);
+  }
   if (turns.length > historyVisible) {
     const more = node('button', 'secondary-button small', `加载更早记录（尚有 ${turns.length - historyVisible} 回合）`);
     more.addEventListener('click', () => { historyVisible += 30; renderPanel('history'); });

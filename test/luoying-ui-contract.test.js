@@ -51,3 +51,23 @@ test('responsive styles retain reachable controls and reduced motion support', a
   assert.match(css, /\.pause-badge/);
   assert.match(css, /\.mode-card/);
 });
+
+test('character sheet renders seven labeled slots without remote assets', async () => {
+  const { script, css } = await readUi();
+  assert.match(script, /EQUIPMENT_SLOT_ORDER/);
+  assert.match(script, /equipment-slot/);
+  for (const slot of ['head', 'neck', 'body', 'arms', 'hands', 'legs', 'feet']) {
+    assert.match(script, new RegExp(slot));
+  }
+  assert.match(css, /\.paper-doll/);
+  assert.doesNotMatch(script, /innerHTML\s*=/);
+  assert.doesNotMatch(css, /https?:\/\//);
+});
+
+test('AI equipment save is revision-safe and does not create a story turn', async () => {
+  const { script } = await readUi();
+  assert.match(script, /async function saveAiEquipment\(itemName\)/);
+  assert.match(script, /equipOwnedItem\(original, itemName, 'ai'\)/);
+  assert.match(script, /saveAutoIfJourney\('ai', candidate, original\.journeyId, original\.revision\)/);
+  assert.doesNotMatch(script, /saveAiEquipment[\s\S]{0,900}append(?:StoryBlock|TurnToStory|Turn)/);
+});
