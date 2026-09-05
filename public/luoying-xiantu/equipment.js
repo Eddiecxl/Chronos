@@ -43,3 +43,18 @@ export function equipOwnedItem(source, itemName, expectedMode = 'ai') {
   state.player.spirit = Math.min(state.player.spirit, derivedPlayerStats(state).maxSpirit);
   return state;
 }
+
+export function assertAiEquipmentSaveAllowed(source) {
+  if (source?.mode !== 'ai') throw new Error('存档模式不匹配。');
+  if (source?.battle) throw new Error('战斗尚未结束，暂不能更换装备。');
+}
+
+export async function commitAiEquipment(storage, source, itemName) {
+  assertAiEquipmentSaveAllowed(source);
+  const candidate = equipOwnedItem(source, itemName, 'ai');
+  return storage.saveAutoIfJourney('ai', candidate, source.journeyId, source.revision);
+}
+
+export function restoreAiEquipmentState(storage, original) {
+  return storage.loadAuto('ai') || original;
+}

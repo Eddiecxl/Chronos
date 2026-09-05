@@ -67,7 +67,15 @@ test('character sheet renders seven labeled slots without remote assets', async 
 test('AI equipment save is revision-safe and does not create a story turn', async () => {
   const { script } = await readUi();
   assert.match(script, /async function saveAiEquipment\(itemName\)/);
-  assert.match(script, /equipOwnedItem\(original, itemName, 'ai'\)/);
-  assert.match(script, /saveAutoIfJourney\('ai', candidate, original\.journeyId, original\.revision\)/);
+  assert.match(script, /commitAiEquipment\(storage, original, itemName\)/);
+  assert.match(script, /restoreAiEquipmentState\(storage, original\)/);
+  assert.match(script, /if \(pending \|\| equipmentPending \|\| state\?\.battle\)/);
   assert.doesNotMatch(script, /saveAiEquipment[\s\S]{0,900}append(?:StoryBlock|TurnToStory|Turn)/);
+});
+
+test('all owned alternatives for a slot remain selectable while AI equipment is safe to save', async () => {
+  const { script } = await readUi();
+  assert.match(script, /function itemsForSlot/);
+  assert.match(script, /for \(const replacement of replacements\)/);
+  assert.match(script, /pending \|\| equipmentPending \|\| Boolean\(state\?\.battle\)/);
 });

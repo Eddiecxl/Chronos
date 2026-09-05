@@ -8,7 +8,7 @@ import { createTranscriptStore } from './transcript-store.js';
 import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
 import { createAiTurnRunner } from './ai-turn.js';
 import { classifyTurn } from './turn-router.js';
-import { EQUIPMENT_SLOT_ORDER, equipOwnedItem } from './equipment.js';
+import { EQUIPMENT_SLOT_ORDER, commitAiEquipment, restoreAiEquipmentState } from './equipment.js';
 import {
   buildCharacterView, buildCodexView, buildHistoryView, buildInventoryView, buildMapView, buildQuestView
 } from './panel-view.js';
@@ -139,6 +139,7 @@ function setPending(value) {
   dom.sendButton.disabled = value;
   dom.playerInput.disabled = value;
   for (const button of dom.localActions.querySelectorAll('button')) button.disabled = value;
+  syncEquipmentControls();
 }
 
 function renderLocalChoices() {
@@ -162,9 +163,17 @@ function renderModeControls() {
   updateChannelUi();
 }
 
+function equipmentUnavailable() {
+  return pending || equipmentPending || Boolean(state?.battle);
+}
+
+function syncEquipmentControls() {
+  for (const button of dom.panelContent.querySelectorAll('[data-equipment-item]')) button.disabled = equipmentUnavailable();
+}
+
 function setEquipmentPending(value) {
   equipmentPending = value;
-  for (const button of dom.panelContent.querySelectorAll('[data-equipment-item]')) button.disabled = value;
+  syncEquipmentControls();
 }
 
 function updateChannelUi() {
@@ -401,31 +410,35 @@ function attributeTile(label, value, detail) {
   return tile;
 }
 
-function itemForSlot(stateToRender, slot) {
-  return buildInventoryView(stateToRender).find((item) => ITEMS[item.name]?.slot === slot && item.amount > 0) || null;
+function itemsForSlot(stateToRender, slot, equippedName) {
+  return buildInventoryView(stateToRender).filter((item) => ITEMS[item.name]?.slot === slot
+    && item.amount > 0 && item.name !== equippedName);
 }
 
 function equipmentSlot(view, slot) {
   const itemName = view.slots[slot];
   const equipped = itemName ? ITEMS[itemName] : null;
-  const replacement = mode === 'ai' ? itemForSlot(state, slot) : null;
+  const replacements = mode === 'ai' ? itemsForSlot(state, slot, itemName) : [];
   const className = `equipment-slot rarity-${equipped?.rarity || 'empty'}`;
   const label = SLOT_LABELS[slot];
   const description = equipped ? `${label}：${itemName}${statText(equipped) ? `，${statText(equipped)}` : ''}` : `${label}：未装备`;
-  const element = replacement && replacement.name !== itemName ? node('button', className) : node('section', className);
-  if (element.tagName === 'BUTTON') {
-    element.type = 'button';
-    element.dataset.equipmentItem = replacement.name;
-    element.disabled = equipmentPending;
-    element.addEventListener('click', () => saveAiEquipment(replacement.name));
-    element.setAttribute('aria-label', `${description}。装备 ${replacement.name}${statText(replacement) ? `，${statText(replacement)}` : ''}`);
-  } else {
-    element.setAttribute('aria-label', description);
-  }
+  const element = node('section', className);
   element.dataset.slot = slot;
+  element.setAttribute('aria-label', state?.battle ? `${description}。战斗未结束，不能更换装备。` : description);
   element.append(node('small', '', label), node('strong', '', itemName || '未装备'));
-  if (replacement && replacement.name !== itemName) element.append(node('span', 'equip-prompt', `换上 ${replacement.name}`));
-  else if (equipped && statText(equipped)) element.append(node('span', '', statText(equipped)));
+  if (equipped && statText(equipped)) element.append(node('span', '', statText(equipped)));
+  if (state?.battle) element.append(node('span', 'equip-prompt', '战斗中不可更换'));
+  const actions = node('div', 'equipment-replacements');
+  for (const replacement of replacements) {
+    const button = node('button', 'equip-action', `换上 ${replacement.name}`);
+    button.type = 'button';
+    button.dataset.equipmentItem = replacement.name;
+    button.disabled = equipmentUnavailable();
+    button.setAttribute('aria-label', `${label}：装备 ${replacement.name}${statText(replacement) ? `，${statText(replacement)}` : ''}`);
+    button.addEventListener('click', () => saveAiEquipment(replacement.name));
+    actions.append(button);
+  }
+  if (replacements.length) element.append(actions);
   return element;
 }
 
@@ -452,17 +465,20 @@ function paperDoll(view) {
 }
 
 async function saveAiEquipment(itemName) {
-  if (equipmentPending || mode !== 'ai' || !state) return;
+  if (pending || equipmentPending || state?.battle) {
+    if (state?.battle) showToast('战斗尚未结束，暂不能更换装备。');
+    return;
+  }
+  if (mode !== 'ai' || !state) return;
   const original = state;
   setEquipmentPending(true);
   try {
-    const candidate = equipOwnedItem(original, itemName, 'ai');
-    state = await storage.saveAutoIfJourney('ai', candidate, original.journeyId, original.revision);
+    state = await commitAiEquipment(storage, original, itemName);
     renderTopbar();
     await renderPanel(activePanel);
     showToast(`${itemName}已装备。此操作未推进世界时间。`);
   } catch (error) {
-    state = original;
+    state = restoreAiEquipmentState(storage, original);
     showToast(error?.message || '装备没有保存。');
     await renderPanel(activePanel);
   } finally {

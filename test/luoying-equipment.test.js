@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
-import { equipOwnedItem } from '../public/luoying-xiantu/equipment.js';
+import { commitAiEquipment, equipOwnedItem, restoreAiEquipmentState } from '../public/luoying-xiantu/equipment.js';
 import { createStorage } from '../public/luoying-xiantu/storage.js';
 
 function memoryStorage() {
@@ -44,4 +44,49 @@ test('AI equipment conditional save advances revision without world progress', a
   assert.equal(saved.story.minuteOfDay, 720);
   assert.equal(saved.memory.turnCount, 4);
   assert.equal(saved.equipment.slots.feet, '踏云履');
+});
+
+test('AI equipment refuses to write while battle state exists', async () => {
+  const source = createGameState('照月', 'ai', () => 'battle-gear');
+  source.inventory.items['踏云履'] = 1;
+  source.battle = { enemyId: 'wolf', hp: 23 };
+  let writes = 0;
+  const storage = { saveAutoIfJourney: async () => { writes += 1; } };
+
+  await assert.rejects(commitAiEquipment(storage, source, '踏云履'), /战斗/);
+  assert.equal(writes, 0);
+  assert.deepEqual(source.battle, { enemyId: 'wolf', hp: 23 });
+});
+
+test('a stale equipment tab restores the authoritative autosave after a revision conflict', async () => {
+  const adapter = createStorage(memoryStorage());
+  const original = createGameState('照月', 'ai', () => 'stale-gear');
+  original.inventory.items['踏云履'] = 1;
+  original.inventory.items['逐风靴'] = 1;
+  adapter.saveAuto('ai', original);
+  const firstTab = structuredClone(adapter.loadAuto('ai'));
+  const staleTab = structuredClone(adapter.loadAuto('ai'));
+  const committed = await commitAiEquipment(adapter, firstTab, '踏云履');
+
+  await assert.rejects(commitAiEquipment(adapter, staleTab, '逐风靴'), /修订|另一窗口|已改变/);
+  const recovered = restoreAiEquipmentState(adapter, staleTab);
+
+  assert.equal(recovered.revision, committed.revision);
+  assert.equal(recovered.equipment.slots.feet, '踏云履');
+  assert.equal(adapter.loadAuto('ai').equipment.slots.feet, '踏云履');
+});
+
+test('AI equipment transaction allows switching between two owned items in one slot', async () => {
+  const adapter = createStorage(memoryStorage());
+  const source = createGameState('照月', 'ai', () => 'switch-gear');
+  source.inventory.items['踏云履'] = 1;
+  source.inventory.items['逐风靴'] = 1;
+  adapter.saveAuto('ai', source);
+
+  const first = await commitAiEquipment(adapter, source, '踏云履');
+  const second = await commitAiEquipment(adapter, first, '逐风靴');
+
+  assert.equal(first.equipment.slots.feet, '踏云履');
+  assert.equal(second.equipment.slots.feet, '逐风靴');
+  assert.equal(second.revision, source.revision + 2);
 });
