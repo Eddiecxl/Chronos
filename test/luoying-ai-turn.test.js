@@ -37,7 +37,7 @@ function detailedFirstPerson(text) {
   return `我贴近门缝，先听见鞋底碾过碎石的轻响，才从木板裂隙看清${text}我没有贸然推门，而是顺着墙角继续观察。雨水正从破瓦滴到草席边缘，屋外灯影每隔片刻便掠过一次；后窗的旧插销已经松动，药车轮印则一直通向巷口。这些细节给了我新的退路，也让追兵开始缩小搜查范围。`;
 }
 
-const validWorldResponse = (text = '门缝外掠过两道人影，其中一人腰间挂着赵府铁牌。') => JSON.stringify({
+const validWorldResponse = (text = '门缝外掠过两道人影，林小满正躲在雨幕里向我示警，其中一人腰间挂着赵府铁牌。') => JSON.stringify({
   blocks: [{ type: 'narr', text: detailedFirstPerson(text) }], effects: { qi: 8 },
   progress: { advanced: ['discovery:zhao-scouts'], consequences: ['追兵开始搜查柴房'], openLoops: ['loop:escape-route'], dangerClocks: { zhaoPursuit: 1 } },
   memory: {
@@ -63,6 +63,8 @@ test('an AI failure leaves the complete world byte-for-byte unchanged', async ()
   const result = await runner.runWorld({ state, input: '推开石门', settings: { provider: 'groq' } });
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(state), before);
+  assert.deepEqual(result.state.codex, state.codex);
+  assert.deepEqual(result.state.equipment, state.equipment);
   assert.equal((await transcriptStore.allTurns(state.journeyId)).length, 0);
   assert.equal(result.retry.input, '推开石门');
 });
@@ -138,6 +140,7 @@ test('successful turns persist transcript facts and generated entities only afte
   assert.equal((await transcriptStore.allTurns('ai-journey')).length, 1);
   assert.ok(result.state.memory.facts.some((fact) => fact.object.includes('两名赵府追兵')));
   assert.equal(result.state.memory.entities['generated:npc:zhao-scout'].name, '赵府斥候');
+  assert.ok(result.state.codex.characters.includes('林小满'));
 });
 
 test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {
@@ -153,6 +156,8 @@ test('autosave failure compensates the transcript and reports an unchanged AI tu
   const result = await runner.runWorld({ state, input: '查看门缝', settings: { provider: 'groq' } });
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(state), before);
+  assert.deepEqual(result.state.codex, state.codex);
+  assert.deepEqual(result.state.equipment, state.equipment);
   assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
   assert.match(result.error, /quota full/);
 });

@@ -6,6 +6,7 @@ import {
 import {
   applyMemoryCandidates, registerEntityCandidates, selectRelevantMemory, updateChapterSummary
 } from './memory.js';
+import { applyCommittedDiscoveries } from './discovery.js';
 import { answerSystemQuery } from './turn-router.js';
 import { LOCATIONS } from './game-data.js';
 
@@ -85,11 +86,12 @@ function narrationFrom(raw, requestType) {
   return parseNarration(raw, requestType === 'system' ? 'system' : 'world');
 }
 
-function failure(error, input, transactionId, contract) {
+function failure(error, input, transactionId, contract, state) {
   return {
     ok: false,
     error: cleanText(error?.message || error || 'AI 回合失败。', 600),
-    retry: { input, transactionId, contract }
+    retry: { input, transactionId, contract },
+    ...(state ? { state } : {})
   };
 }
 
@@ -156,6 +158,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       let committed = commitValidatedWorldTurn(state, contract, narration);
       committed = registerEntityCandidates(committed, narration.memory?.entities || [], txId);
       committed = applyMemoryCandidates(committed, narration.memory?.facts || [], txId);
+      committed = applyCommittedDiscoveries(committed, narration);
       if (narration.memory?.chapterSummary) {
         committed = updateChapterSummary(committed, contract.chapter.id, narration.memory.chapterSummary);
       }
@@ -197,7 +200,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       } else await transcriptStore.appendTurn(committed.journeyId, turn);
       return { ok: true, state: committed, blocks: narration.blocks, suggestions: narration.suggestions, turn };
     } catch (error) {
-      return failure(error, cleanInput, txId, contract);
+      return failure(error, cleanInput, txId, contract, source);
     }
   }
 
