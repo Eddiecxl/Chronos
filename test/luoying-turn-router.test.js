@@ -11,6 +11,7 @@ function seededAiState() {
   state.player.realm = 2;
   state.battle = { enemyId: 'spirit-rat', hp: 20, maxHp: 28, turn: 2, defending: false };
   state.relationships['林小满'] = 27;
+  state.codex.characters = ['林小满'];
   state.memory.chapterSummaries['act1-awakening'] = '照月从赵府柴房逃出，救下林小满。';
   state.memory.facts.push({
     id: 'fact:promise', subjectId: 'npc:lin-xiaoman', predicate: 'promised', object: '一起调查后山',
@@ -58,5 +59,18 @@ test('system answers cover skills inventory relationships location and recap wit
     assert.ok(answer.blocks.every((block) => block.type === 'sys'), query);
   }
   assert.match(answerSystemQuery(state, '林小满信任我吗').blocks[0].text, /27/);
+  assert.match(answerSystemQuery(state, '人物关系').blocks[0].text, /林小满 27/);
   assert.match(answerSystemQuery(state, '回顾之前发生的事').blocks.map((block) => block.text).join(''), /柴房|后山/);
+});
+
+test('system panel answers do not enumerate people or places that were not discovered', () => {
+  const state = createGameState('照月', 'ai', () => 'spoiler-free-router');
+  state.relationships['林小满'] = 27;
+  const relation = answerSystemQuery(state, '人物关系').blocks[0].text;
+  const map = answerSystemQuery(state, '地图').blocks[0].text;
+  const inventory = answerSystemQuery(state, '背包').blocks[0].text;
+
+  assert.doesNotMatch(relation, /林小满|赵天霸/);
+  assert.doesNotMatch(map, /青石镇|飞升台|已解锁/);
+  assert.doesNotMatch(inventory, /\d+\/\d+/);
 });

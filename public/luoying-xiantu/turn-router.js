@@ -1,4 +1,11 @@
-import { ITEMS, LOCATIONS, NPCS, QUESTS, REALMS, TECHNIQUES } from './game-data.js';
+import { REALMS, TECHNIQUES } from './game-data.js';
+import {
+  buildCharacterView,
+  buildHistoryView,
+  buildInventoryView,
+  buildMapView,
+  buildQuestView
+} from './panel-view.js';
 
 const SLASH_COMMANDS = new Map([
   ['/状态', 'status'], ['/面板', 'status'], ['/境界', 'realm'], ['/灵气', 'qi'], ['/灵力', 'spirit'],
@@ -17,7 +24,7 @@ function inferSystemCommand(input) {
   if (/装备|武器|护甲|配饰/.test(input)) return 'equipment';
   if (/背包|物品|丹药|材料/.test(input)) return 'inventory';
   if (/任务|主线|支线|目标/.test(input)) return 'quest';
-  if (/关系|好感|信任|讨厌|喜欢我吗/.test(input) || Object.keys(NPCS).some((name) => input.includes(name) && /如何|怎样|多少|信任|关系|好感/.test(input))) return 'relationship';
+  if (/关系|好感|信任|讨厌|喜欢我吗/.test(input)) return 'relationship';
   if (/地图|位置|在哪里|能去哪里|地点/.test(input)) return 'map';
   if (/回顾|回忆|之前发生|经历过|记得什么/.test(input)) return 'recap';
   if (/存档|保存|读档|导出|导入/.test(input)) return 'save';
@@ -68,8 +75,8 @@ export function classifyTurn({ mode, channel, input }) {
 const systemBlock = (text) => ({ type: 'sys', text });
 
 function statusAnswer(state) {
-  const realm = REALMS[state.player.realm] || REALMS[0];
-  return systemBlock(`${state.player.name} · ${realm.name}｜气血 ${state.player.hp}/${state.player.maxHp}｜灵气 ${state.player.qi}/${realm.need}｜灵力 ${state.player.spirit}/${state.player.maxSpirit}｜灵石 ${state.player.gold}｜第 ${state.story.day} 日 ${state.story.period}｜${state.story.location}`);
+  const view = buildCharacterView(state);
+  return systemBlock(`${view.name} · ${view.realm}｜气血 ${view.hp}/${view.maxHp}｜灵气 ${view.qi}/${view.qiNeed}｜灵力 ${view.spirit}/${view.maxSpirit}｜灵石 ${state.player.gold}｜第 ${state.story.day} 日 ${state.story.period}｜${state.story.location}`);
 }
 
 function qiAnswer(state) {
@@ -79,59 +86,59 @@ function qiAnswer(state) {
 }
 
 function spiritAnswer(state) {
-  const equippedCosts = state.techniques.equipped
-    .filter((name) => TECHNIQUES[name])
-    .map((name) => `${name} ${TECHNIQUES[name].cost}点`)
+  const view = buildCharacterView(state);
+  const equippedCosts = view.techniques
+    .filter((technique) => technique.equipped)
+    .map((technique) => `${technique.name} ${technique.cost}点`)
     .join('、');
-  return systemBlock(`当前灵力 ${state.player.spirit}/${state.player.maxSpirit}。灵力用于施展功法，不计入突破；已装备功法消耗：${equippedCosts || '暂无可施展功法'}。`);
+  return systemBlock(`当前灵力 ${view.spirit}/${view.maxSpirit}。灵力用于施展功法，不计入突破；已装备功法消耗：${equippedCosts || '暂无可施展功法'}。`);
 }
 
 function techniqueAnswer(state) {
-  const lines = state.techniques.known.map((name) => {
-    const technique = TECHNIQUES[name];
-    if (!technique) return name;
-    const equipped = state.techniques.equipped.includes(name) ? '已装备' : '未装备';
-    return `《${name}》· ${equipped} · 灵力 ${technique.cost} · ${technique.description}`;
-  });
+  const lines = buildCharacterView(state).techniques
+    .map((technique) => `《${technique.name}》· ${technique.equipped ? '已装备' : '未装备'} · 灵力 ${technique.cost} · ${technique.description}`);
   return systemBlock(`已掌握功法：${lines.join('；') || '尚未掌握功法'}。`);
 }
 
 function inventoryAnswer(state) {
-  const lines = Object.entries(state.inventory.items)
-    .filter(([, amount]) => amount > 0)
-    .map(([name, amount]) => `${name}×${amount}${ITEMS[name] ? `（${ITEMS[name].description}）` : ''}`);
-  return systemBlock(`背包 ${Object.keys(state.inventory.items).length}/${state.inventory.limit}：${lines.join('；') || '空'}。`);
+  const lines = buildInventoryView(state)
+    .map((entry) => `${entry.name}×${entry.amount}（${entry.description}）`);
+  return systemBlock(`背包：${lines.join('；') || '空'}。`);
 }
 
 function equipmentAnswer(state) {
-  return systemBlock(`装备：武器 ${state.equipment.weapon || '无'}｜护甲 ${state.equipment.armor || '无'}｜配饰 ${state.equipment.accessory || '无'}。装备详情可在背包面板查看。`);
+  const slots = buildCharacterView(state).slots;
+  return systemBlock(`装备：武器 ${slots.hands || '无'}｜护甲 ${slots.body || '无'}｜配饰 ${slots.neck || '无'}。装备详情可在背包面板查看。`);
 }
 
 function questAnswer(state) {
-  const lines = state.quests.active.map((entry) => {
-    const quest = QUESTS[entry.id];
-    return quest ? `${quest.type === 'main' ? '主线' : '支线'}《${quest.title}》${entry.progress}/${entry.target}：${quest.description}` : entry.id;
-  });
-  return systemBlock(lines.length ? lines.join('；') : '当前没有进行中的任务。主线导演会在世界回合中继续推进因果。');
+  const view = buildQuestView(state);
+  const lines = [
+    ...view.active.map((entry) => `进行中｜${entry.type === 'main' ? '主线' : '支线'}《${entry.title}》${entry.progress}/${entry.target}：${entry.description}`),
+    ...view.completed.map((entry) => `已完成｜《${entry.title}》：${entry.description}`),
+    ...view.failed.map((entry) => `已失败｜《${entry.title}》：${entry.description}`)
+  ];
+  return systemBlock(lines.length ? lines.join('；') : '当前没有已记录的任务。');
 }
 
 function relationshipAnswer(state, input) {
-  const mentioned = Object.keys(state.relationships).filter((name) => input.includes(name));
-  const names = mentioned.length ? mentioned : Object.keys(state.relationships);
-  return systemBlock(`人物关系：${names.map((name) => `${name} ${state.relationships[name]}`).join('｜')}。正值代表亲近，负值代表戒备或敌意。`);
+  const rows = buildCharacterView(state).relationships;
+  const mentioned = rows.filter((row) => input?.includes(row.name));
+  const visible = mentioned.length ? mentioned : rows;
+  return systemBlock(visible.length
+    ? `人物关系：${visible.map((row) => `${row.name} ${row.value}`).join('｜')}。正值代表亲近，负值代表戒备或敌意。`
+    : '旅途尚未留下可辨认的人物关系记录。');
 }
 
 function mapAnswer(state) {
-  const unlocked = Object.entries(LOCATIONS)
-    .filter(([, location]) => state.story.act >= location.act && state.player.realm >= location.realm)
-    .map(([name]) => name);
-  return systemBlock(`当前位置：${state.story.location}。${LOCATIONS[state.story.location]?.description || ''} 已解锁地点：${unlocked.join('、')}。查看地图不会推动时间。`);
+  const rows = buildMapView(state);
+  const current = rows.find((row) => row.current) || rows[0];
+  return systemBlock(`当前位置：${current?.name || state.story.location}。${current?.description || ''} 已知地点：${rows.map((row) => row.name).join('、')}。查看地图不会推动时间。`);
 }
 
 function recapAnswer(state) {
-  const summaries = Object.values(state.memory.chapterSummaries).slice(-2);
-  const facts = state.memory.facts.slice(-6).map((fact) => `${fact.subjectId}：${fact.object}`);
-  const lines = [...summaries, ...facts];
+  const history = buildHistoryView(state);
+  const lines = [...history.summaries, ...history.facts];
   return systemBlock(lines.length ? `旅程回顾：${lines.join('；')}` : `你从赵府柴房醒来，如今身在${state.story.location}。更完整的经历会随世界回合写入旅程记录。`);
 }
 
