@@ -4,7 +4,7 @@ import { createGameState, migrateGameState, validateImportedState } from '../pub
 
 test('new games have a fixed mode and separate qi and spirit pools', () => {
   const state = createGameState('照月', 'ai', () => 'journey-ai');
-  assert.equal(state.schemaVersion, 3);
+  assert.equal(state.schemaVersion, 4);
   assert.equal(state.mode, 'ai');
   assert.equal(state.journeyId, 'journey-ai');
   assert.equal(state.player.qi, 0);
@@ -54,4 +54,18 @@ test('invalid imported saves are rejected without evaluation', () => {
     () => validateImportedState({ schemaVersion: 3, mode: 'local', player: { name: '<script>' } }, 'local'),
     /存档/
   );
+});
+
+test('v3 AI equipment migrates into the seven validated equipment slots', () => {
+  const state = migrateGameState({
+    schemaVersion: 3,
+    mode: 'ai',
+    player: { name: '照月' },
+    equipment: { weapon: '玄铁剑', armor: '流云法袍', accessory: '同心结' }
+  }, 'ai');
+
+  assert.deepEqual(Object.keys(state.equipment.slots), ['head', 'neck', 'body', 'arms', 'hands', 'legs', 'feet']);
+  assert.equal(state.equipment.slots.hands, '玄铁剑');
+  assert.equal(state.equipment.slots.body, '流云法袍');
+  assert.equal(state.equipment.slots.neck, '同心结');
 });

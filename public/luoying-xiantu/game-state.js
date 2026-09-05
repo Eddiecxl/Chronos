@@ -1,4 +1,6 @@
-export const GAME_SCHEMA_VERSION = 3;
+import { normalizeEquipment } from './equipment.js';
+
+export const GAME_SCHEMA_VERSION = 4;
 export const REALM_COUNT = 23;
 export const GAME_MODES = ['local', 'ai'];
 
@@ -214,7 +216,7 @@ export function createGameState(name = '顾长生', mode = 'local', idFactory = 
     },
     quests: { active: [], completed: [], failed: [] },
     inventory: { items: { '回春丹': 1 }, materials: {}, limit: 36 },
-    equipment: { weapon: null, armor: null, accessory: null },
+    equipment: normalizeEquipment({}),
     techniques: { known: ['吐纳'], equipped: ['吐纳'], mastery: { '吐纳': 0 } },
     relationships: { ...DEFAULT_RELATIONSHIPS },
     karma: { mercy: 0, ambition: 0, demonic: 0, promises: [] },
@@ -298,11 +300,7 @@ function normalizeV3(input, expectedMode) {
     limit: Math.floor(clamp(inventory.limit || 36, 12, 120))
   };
   const equipment = isRecord(input.equipment) ? input.equipment : {};
-  base.equipment = {
-    weapon: cleanText(equipment.weapon, 32) || null,
-    armor: cleanText(equipment.armor, 32) || null,
-    accessory: cleanText(equipment.accessory, 32) || null
-  };
+  base.equipment = normalizeEquipment(equipment);
   base.techniques = {
     known: stringList(techniques.known, 30, 32),
     equipped: stringList(techniques.equipped, 4, 32),

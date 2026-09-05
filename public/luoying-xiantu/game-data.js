@@ -42,14 +42,22 @@ export const ITEMS = {
   '青岚令': { type: 'quest', price: 0, description: '进入青岚秘境的身份令牌。' },
   '残缺玉简': { type: 'quest', price: 0, description: '记载着被人为抹去的一段宗门历史。' },
   '星盘碎片': { type: 'quest', price: 0, description: '靠近天机台时会发出微光。' },
-  '木剑': { type: 'weapon', price: 10, attack: 4, description: '外门弟子的制式练习剑。' },
-  '玄铁剑': { type: 'weapon', price: 160, attack: 18, description: '沉重无锋，以灵力驭之可破护体罡气。' },
-  '落樱剑': { type: 'weapon', price: 680, attack: 42, description: '挥剑时花影漫天，与落樱剑诀相合。' },
-  '问天剑': { type: 'weapon', price: 0, attack: 88, description: '剑冢万剑认可后诞生的道兵。' },
-  '外门青衫': { type: 'armor', price: 16, defense: 3, description: '耐脏耐磨，还绣着落霞云纹。' },
-  '流云法袍': { type: 'armor', price: 210, defense: 16, description: '可卸去部分冲击，衣摆永不沾尘。' },
-  '玄武灵甲': { type: 'armor', price: 850, defense: 38, description: '取玄武遗蜕炼成，守势沉稳。' },
-  '同心结': { type: 'accessory', price: 0, spirit: 12, description: '一根笨拙却郑重编好的红绳。' }
+  '木剑': { type: 'weapon', slot: 'hands', rarity: 'common', price: 10, attack: 4, description: '外门弟子的制式练习剑。' },
+  '玄铁剑': { type: 'weapon', slot: 'hands', rarity: 'uncommon', price: 160, attack: 18, description: '沉重无锋，以灵力驭之可破护体罡气。' },
+  '落樱剑': { type: 'weapon', slot: 'hands', rarity: 'rare', price: 680, attack: 42, description: '挥剑时花影漫天，与落樱剑诀相合。' },
+  '问天剑': { type: 'weapon', slot: 'hands', rarity: 'epic', price: 0, attack: 88, description: '剑冢万剑认可后诞生的道兵。' },
+  '外门青衫': { type: 'armor', slot: 'body', rarity: 'common', price: 16, defense: 3, description: '耐脏耐磨，还绣着落霞云纹。' },
+  '流云法袍': { type: 'armor', slot: 'body', rarity: 'rare', price: 210, defense: 16, description: '可卸去部分冲击，衣摆永不沾尘。' },
+  '玄武灵甲': { type: 'armor', slot: 'body', rarity: 'epic', price: 850, defense: 38, description: '取玄武遗蜕炼成，守势沉稳。' },
+  '同心结': { type: 'accessory', slot: 'neck', rarity: 'rare', price: 0, spirit: 12, description: '一根笨拙却郑重编好的红绳。' },
+  '云纹束冠': { type: 'armor', slot: 'head', rarity: 'uncommon', defense: 2, spirit: 3, price: 55, description: '以护神云纹稳住识海的外门束冠。' },
+  '星辉道冠': { type: 'armor', slot: 'head', rarity: 'epic', defense: 8, spirit: 10, price: 520, description: '冠上星砂会随神识流转而明灭。' },
+  '青藤护臂': { type: 'armor', slot: 'arms', rarity: 'uncommon', defense: 3, price: 48, description: '灵藤编成，受击时自行收紧。' },
+  '玄鳞护臂': { type: 'armor', slot: 'arms', rarity: 'epic', attack: 4, defense: 9, price: 610, description: '玄鳞层叠，能卸开近身重击。' },
+  '轻羽腿甲': { type: 'armor', slot: 'legs', rarity: 'rare', defense: 5, price: 130, description: '薄如羽翼，不妨碍步法变化。' },
+  '玄武胫甲': { type: 'armor', slot: 'legs', rarity: 'epic', defense: 12, price: 760, description: '沉重灵甲将下盘牢牢钉在地脉上。' },
+  '逐风靴': { type: 'armor', slot: 'feet', rarity: 'rare', defense: 2, spirit: 3, price: 115, description: '靴底风纹能减轻长途跋涉的负担。' },
+  '踏云履': { type: 'armor', slot: 'feet', rarity: 'epic', defense: 5, spirit: 7, price: 680, description: '落足如踏云，急转时几乎不留声息。' }
 };
 
 export const TECHNIQUES = {
