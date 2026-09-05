@@ -53,6 +53,9 @@ function runnerWithNarrator(narrate, transcriptStore = createTranscriptStore({ m
 
 test('an AI failure leaves the complete world byte-for-byte unchanged', async () => {
   const state = seededAiState();
+  state.director.chapterTurns = 3;
+  state.director.turnsSinceChapterProgress = 3;
+  state.director.pacePressure = 1;
   const before = JSON.stringify(state);
   const transcriptStore = createTranscriptStore({ memory: new Map() });
   const runner = createAiTurnRunner({
@@ -65,6 +68,9 @@ test('an AI failure leaves the complete world byte-for-byte unchanged', async ()
   assert.equal(JSON.stringify(state), before);
   assert.deepEqual(result.state.codex, state.codex);
   assert.deepEqual(result.state.equipment, state.equipment);
+  assert.equal(result.state.director.chapterTurns, 3);
+  assert.equal(result.state.director.turnsSinceChapterProgress, 3);
+  assert.equal(result.state.director.pacePressure, 1);
   assert.equal((await transcriptStore.allTurns(state.journeyId)).length, 0);
   assert.equal(result.retry.input, '推开石门');
 });
@@ -73,6 +79,9 @@ test('invalid narration receives two repair calls then rolls back', async () => 
   let calls = 0;
   const requestTypes = [];
   const state = seededAiState();
+  state.director.chapterTurns = 6;
+  state.director.turnsSinceChapterProgress = 6;
+  state.director.pacePressure = 2;
   const before = JSON.stringify(state);
   const runner = runnerWithNarrator(async (_settings, context) => { calls += 1; requestTypes.push(context.requestType); return noProgressResponse(); });
   const result = await runner.runWorld({ state, input: '继续', settings: { provider: 'groq' } });
@@ -80,6 +89,9 @@ test('invalid narration receives two repair calls then rolls back', async () => 
   assert.deepEqual(requestTypes, ['world', 'repair', 'repair']);
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(state), before);
+  assert.equal(result.state.director.chapterTurns, 6);
+  assert.equal(result.state.director.turnsSinceChapterProgress, 6);
+  assert.equal(result.state.director.pacePressure, 2);
 });
 
 test('one repair attempt can turn an invalid response into a committed world turn', async () => {

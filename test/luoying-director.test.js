@@ -46,6 +46,11 @@ function narrationWithText(text) {
 test('authored rails contain four complete chapters per act and stable world ids', () => {
   for (let act = 1; act <= 5; act += 1) assert.equal(CHAPTERS.filter((chapter) => chapter.act === act).length, 4);
   assert.ok(CHAPTERS.every((chapter) => chapter.id && chapter.goal && chapter.entry && chapter.dangerClock && Array.isArray(chapter.exits)));
+  assert.ok(CHAPTERS.every((chapter) => chapter.pace
+    && chapter.pace.gentle > 0
+    && chapter.pace.gentle < chapter.pace.firm
+    && chapter.pace.firm < chapter.pace.decisive
+    && chapter.pace.decisive <= 12));
   assert.ok(Object.values(NPCS).every((npc) => npc.id.startsWith('npc:')));
   assert.ok(Object.values(LOCATIONS).every((location) => location.id.startsWith('location:')));
 });
@@ -57,8 +62,59 @@ test('scene contracts carry a goal danger clock and NPC knowledge', () => {
   assert.ok(contract.dangerClocks.length > 0);
   assert.equal(contract.chapter.requiredDiscoveries[0].progressId, 'discovery:forest-footprints');
   assert.ok(contract.actors.find((actor) => actor.id === 'npc:lin-xiaoman').knownFactIds.includes('fact:forest-footprints'));
+  assert.deepEqual(contract.pace, {
+    level: 0,
+    chapterTurns: 0,
+    stalledTurns: 0,
+    instruction: '允许围绕当前目标进行有意义的探索。',
+    requiredProgressIds: [],
+    requirementsSatisfied: true
+  });
   assert.equal(Object.isFrozen(contract), true);
   assert.equal(Object.isFrozen(contract.actors), true);
+});
+
+test('minor discoveries do not reset stalled chapter momentum', () => {
+  const state = seededAiState();
+  state.director.turnsSinceChapterProgress = 4;
+  const contract = createSceneContract(state, '我继续检查树叶', 'turn-pace');
+  const narration = narrationWithText('我发现一片与主线无关的新叶痕。');
+  narration.progress.advanced = ['scene:leaf-mark'];
+  narration.progress.dangerClocks = {};
+  narration.memory.facts = [{ subjectId: 'world:leaf', predicate: 'color', object: '叶缘发黄', confidence: 1 }];
+  const next = commitValidatedWorldTurn(state, contract, narration);
+  assert.equal(next.director.chapterTurns, 1);
+  assert.equal(next.director.turnsSinceChapterProgress, 5);
+  assert.equal(next.director.pacePressure, 2);
+});
+
+test('decisive pressure rejects decorative progress and asks for a natural route forward', () => {
+  const state = seededAiState();
+  state.director.turnsSinceChapterProgress = 8;
+  const contract = createSceneContract(state, '我观察四周', 'turn-decisive');
+  const result = validateAiWorldTurn(state, contract, narrationWithText('我又发现一处无关划痕。'), []);
+  assert.equal(contract.pace.level, 3);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /章节推进|决定性机会/.test(error)));
+});
+
+test('a real chapter exit resets hidden chapter pacing counters', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 7;
+  state.director.turnsSinceChapterProgress = 6;
+  state.director.pacePressure = 2;
+  const contract = createSceneContract(state, '把证据交给执事', 'turn-pace-exit');
+  const narration = {
+    ...narrationWithText('我把拓印和黑砂交到戒律堂，执事验明来源后立刻封锁后山。'),
+    progress: {
+      advanced: ['chapter:act2-forest-signs:complete'], consequences: ['宗门开始戒备'],
+      openLoops: [], resolvedLoops: ['loop:demonic-trail'], dangerClocks: { demonicTrail: 1 }
+    }
+  };
+  const next = commitValidatedWorldTurn(state, contract, narration);
+  assert.equal(next.director.chapterTurns, 0);
+  assert.equal(next.director.turnsSinceChapterProgress, 0);
+  assert.equal(next.director.pacePressure, 0);
 });
 
 test('the opening contract exposes Zhao Tianba as a canonical actor instead of a generated duplicate', () => {

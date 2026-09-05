@@ -119,101 +119,121 @@ export const CHAPTERS = [
     id: 'act1-awakening', act: 1, goal: '逃离赵府并保住自己的性命', entry: '在赵府柴房醒来',
     actorIds: ['npc:zhao-tianba'],
     requiredFacts: [], optionalThreads: ['loop:lost-memory'], dangerClock: { id: 'zhaoPursuit', limit: 4 },
+    pace: { gentle: 1, firm: 3, decisive: 5 },
     exits: [{ progressId: 'chapter:act1-awakening:complete', nextChapterId: 'act1-rain-alley' }]
   },
   {
     id: 'act1-rain-alley', act: 1, goal: '决定是否援助林小满并摆脱赵府追兵', entry: '冲入青石镇雨巷',
     requiredFacts: [], optionalThreads: ['loop:xiaoman-medicine'], dangerClock: { id: 'zhaoPursuit', limit: 6 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act1-rain-alley:complete', nextChapterId: 'act1-elder-test' }]
   },
   {
     id: 'act1-elder-test', act: 1, goal: '通过李老考验并第一次引气入体', entry: '遇见醉酒守山人',
     requiredFacts: [], optionalThreads: ['loop:elder-identity'], dangerClock: { id: 'meridianStrain', limit: 4 },
+    pace: { gentle: 1, firm: 3, decisive: 5 },
     exits: [{ progressId: 'chapter:act1-elder-test:complete', nextChapterId: 'act1-mountain-gate' }]
   },
   {
     id: 'act1-mountain-gate', act: 1, goal: '登上九百石阶并取得外门身份', entry: '抵达落霞宗山门',
     requiredFacts: [], optionalThreads: ['loop:self-ringing-bell'], dangerClock: { id: 'entryDeadline', limit: 3 },
+    pace: { gentle: 1, firm: 2, decisive: 3 },
     exits: [{ progressId: 'chapter:act1-mountain-gate:complete', nextChapterId: 'act2-outer-trial' }]
   },
   {
     id: 'act2-outer-trial', act: 2, goal: '完成外门功课并建立首批同门关系', entry: '开始外门弟子生活',
     requiredFacts: [], optionalThreads: ['loop:tournament-rival'], dangerClock: { id: 'trialDeadline', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act2-outer-trial:complete', nextChapterId: 'act2-forest-signs' }]
   },
   {
     id: 'act2-forest-signs', act: 2, goal: '查明后山异动并决定是否告知宗门', entry: '后山出现不属于同门的足迹',
     requiredFacts: ['fact:forest-footprints'], optionalThreads: ['loop:demonic-trail'], dangerClock: { id: 'demonicTrail', limit: 6 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act2-forest-signs:complete', nextChapterId: 'act2-sect-undercurrent' }]
   },
   {
     id: 'act2-sect-undercurrent', act: 2, goal: '找出失踪弟子与残缺玉简的联系', entry: '戒律堂开始封锁消息',
     requiredFacts: [], optionalThreads: ['loop:jaded-letter', 'loop:sect-spy'], dangerClock: { id: 'sectSuspicion', limit: 6 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act2-sect-undercurrent:complete', nextChapterId: 'act2-tournament' }]
   },
   {
     id: 'act2-tournament', act: 2, goal: '在宗门大比中赢得进入青岚秘境的资格', entry: '宗门大比开场',
     requiredFacts: [], optionalThreads: ['loop:rival-respect'], dangerClock: { id: 'tournamentRounds', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act2-tournament:complete', nextChapterId: 'act3-mystic-entry' }]
   },
   {
     id: 'act3-mystic-entry', act: 3, goal: '进入青岚秘境并与失散同门汇合', entry: '秘境入口开启',
     requiredFacts: [], optionalThreads: ['loop:missing-team'], dangerClock: { id: 'gateCollapse', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act3-mystic-entry:complete', nextChapterId: 'act3-fog-alliance' }]
   },
   {
     id: 'act3-fog-alliance', act: 3, goal: '在青雾中选择盟友并确认各自目的', entry: '队伍被迷雾拆散',
     requiredFacts: [], optionalThreads: ['loop:masked-scout'], dangerClock: { id: 'fogCorruption', limit: 6 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act3-fog-alliance:complete', nextChapterId: 'act3-stone-truth' }]
   },
   {
     id: 'act3-stone-truth', act: 3, goal: '解读无名石碑并辨认被删去的名字', entry: '发现秘境深处的残碑',
     requiredFacts: [], optionalThreads: ['loop:founder-name'], dangerClock: { id: 'ruinAwakening', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act3-stone-truth:complete', nextChapterId: 'act3-core-choice' }]
   },
   {
     id: 'act3-core-choice', act: 3, goal: '处理遗境核心并带着代价离开秘境', entry: '抵达遗境之心',
     requiredFacts: [], optionalThreads: ['loop:core-price'], dangerClock: { id: 'realmCollapse', limit: 4 },
+    pace: { gentle: 1, firm: 3, decisive: 5 },
     exits: [{ progressId: 'chapter:act3-core-choice:complete', nextChapterId: 'act4-north-arrival' }]
   },
   {
     id: 'act4-north-arrival', act: 4, goal: '抵达北境并守住第一轮攻势', entry: '北境烽书抵达',
     requiredFacts: [], optionalThreads: ['loop:border-casualties'], dangerClock: { id: 'passDefense', limit: 7 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act4-north-arrival:complete', nextChapterId: 'act4-prisoner-truth' }]
   },
   {
     id: 'act4-prisoner-truth', act: 4, goal: '查明魔道俘虏主动投降的原因', entry: '无名俘虏要求单独见面',
     requiredFacts: [], optionalThreads: ['loop:prisoner-name'], dangerClock: { id: 'executionDeadline', limit: 4 },
+    pace: { gentle: 1, firm: 3, decisive: 5 },
     exits: [{ progressId: 'chapter:act4-prisoner-truth:complete', nextChapterId: 'act4-rift-descent' }]
   },
   {
     id: 'act4-rift-descent', act: 4, goal: '深入幽冥裂隙并揭开仙魔旧约', entry: '裂隙通道短暂稳定',
     requiredFacts: [], optionalThreads: ['loop:ancient-pact'], dangerClock: { id: 'riftTaint', limit: 7 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act4-rift-descent:complete', nextChapterId: 'act4-sect-reckoning' }]
   },
   {
     id: 'act4-sect-reckoning', act: 4, goal: '在宗门存亡与被掩盖的真相之间作出抉择', entry: '回到落霞宗接受问罪',
     requiredFacts: [], optionalThreads: ['loop:sect-truth'], dangerClock: { id: 'sectSchism', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act4-sect-reckoning:complete', nextChapterId: 'act5-star-reflection' }]
   },
   {
     id: 'act5-star-reflection', act: 5, goal: '在天机台重见此生最重要的三段因果', entry: '白昼星现',
     requiredFacts: [], optionalThreads: ['loop:unpaid-debt'], dangerClock: { id: 'fateFracture', limit: 6 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act5-star-reflection:complete', nextChapterId: 'act5-old-promises' }]
   },
   {
     id: 'act5-old-promises', act: 5, goal: '在渡劫前兑现或放下仍未完成的承诺', entry: '旧人陆续来到天机台',
     requiredFacts: [], optionalThreads: ['loop:last-meal', 'loop:broken-promise'], dangerClock: { id: 'tribulationApproach', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act5-old-promises:complete', nextChapterId: 'act5-heart-mirror' }]
   },
   {
     id: 'act5-heart-mirror', act: 5, goal: '面对心魔并承认自己真正的执念', entry: '心镜映出另一种人生',
     requiredFacts: [], optionalThreads: ['loop:heart-name'], dangerClock: { id: 'heartErosion', limit: 5 },
+    pace: { gentle: 2, firm: 5, decisive: 8 },
     exits: [{ progressId: 'chapter:act5-heart-mirror:complete', nextChapterId: 'act5-tribulation' }]
   },
   {
     id: 'act5-tribulation', act: 5, goal: '渡过九重雷劫并亲手选择此生结局', entry: '登上飞升台',
-    requiredFacts: [], optionalThreads: ['loop:final-choice'], dangerClock: { id: 'tribulation', limit: 9 }, exits: []
+    requiredFacts: [], optionalThreads: ['loop:final-choice'], dangerClock: { id: 'tribulation', limit: 9 },
+    pace: { gentle: 2, firm: 5, decisive: 8 }, exits: []
   }
 ];
 

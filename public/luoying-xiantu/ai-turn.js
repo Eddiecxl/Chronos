@@ -62,6 +62,7 @@ function compactContract(contract) {
     effectCaps: contract.effectCaps,
     idleLimit: contract.idleLimit,
     consecutiveIdleTurns: contract.consecutiveIdleTurns,
+    pace: contract.pace,
     player: contract.player
   };
 }

@@ -8,6 +8,12 @@ const EFFECT_CAPS = {
 };
 const PROGRESS_PREFIXES = ['opening:', 'scene:', 'chapter:', 'quest:', 'fact:', 'relationship:', 'danger:', 'battle:', 'discovery:'];
 const MIN_WORLD_NARRATIVE_CHARS = 90;
+const PACE_INSTRUCTIONS = [
+  '允许围绕当前目标进行有意义的探索。',
+  '自然引入可行动的线索或关系变化，仍由玩家决定如何回应。',
+  '自然引入因果性的危险、代价或 NPC 行动，仍停在玩家选择之前。',
+  '自然揭示通向缺失前置或章节出口的决定性机会，并停在玩家选择之前。'
+];
 const AUTHORED_FACTS = {
   'fact:forest-footprints': {
     progressId: 'discovery:forest-footprints',
@@ -96,6 +102,41 @@ function currentChapter(state) {
   return exact || CHAPTERS.find((chapter) => chapter.act === state.story.act) || CHAPTERS[0];
 }
 
+function pressureLevel(stalled, pace) {
+  if (stalled >= pace.decisive) return 3;
+  if (stalled >= pace.firm) return 2;
+  if (stalled >= pace.gentle) return 1;
+  return 0;
+}
+
+function progressIds(narration) {
+  return Array.isArray(narration?.progress?.advanced)
+    ? narration.progress.advanced.map((id) => cleanId(id)).filter(Boolean)
+    : [];
+}
+
+function missingRequiredProgressIds(chapter, facts) {
+  const knownFactIds = new Set(facts.map((fact) => fact.id));
+  return chapter.requiredFacts
+    .filter((factId) => !knownFactIds.has(factId))
+    .map((factId) => AUTHORED_FACTS[factId]?.progressId)
+    .filter(Boolean);
+}
+
+export function classifyChapterProgress(narration, contract) {
+  const advanced = progressIds(narration);
+  const exitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
+  if (advanced.some((id) => exitIds.has(id))) return 'chapter';
+
+  const questAdvanced = advanced.some((id) => contract.legalQuestIds.some((questId) => id === `quest:${questId}` || id.startsWith(`quest:${questId}:`)));
+  const requiredDiscovery = advanced.some((id) => contract.pace.requiredProgressIds.includes(id));
+  const clockChanged = narration?.progress?.dangerClocks
+    && Object.values(narration.progress.dangerClocks).some((delta) => Number(delta) !== 0);
+  const resolvedCurrentLoop = Array.isArray(narration?.progress?.resolvedLoops)
+    && narration.progress.resolvedLoops.some((id) => contract.openLoopIds.includes(cleanId(id)));
+  return requiredDiscovery || questAdvanced || clockChanged || resolvedCurrentLoop ? 'material' : 'minor';
+}
+
 function intrinsicFactId(npcId) {
   return `fact:authored:${String(npcId).replace(/^npc:/, '')}:identity`;
 }
@@ -168,6 +209,9 @@ export function createSceneContract(source, input, turnId) {
   const unlockedLocations = Object.entries(LOCATIONS)
     .filter(([, location]) => state.story.act >= location.act && state.player.realm >= location.realm)
     .map(([name, location]) => ({ id: location.id, name }));
+  const requiredProgressIds = missingRequiredProgressIds(chapter, rememberedFacts);
+  const stalledTurns = state.director.turnsSinceChapterProgress;
+  const paceLevel = pressureLevel(stalledTurns, chapter.pace);
 
   return deepFreeze({
     turnId: cleanId(turnId) || `turn-${state.memory.turnCount + 1}`,
@@ -196,6 +240,14 @@ export function createSceneContract(source, input, turnId) {
     legalRelationshipIds: Object.keys(NPCS),
     effectCaps: structuredClone(EFFECT_CAPS),
     requiredProgressCategories: [...PROGRESS_PREFIXES],
+    pace: {
+      level: paceLevel,
+      chapterTurns: state.director.chapterTurns,
+      stalledTurns,
+      instruction: PACE_INSTRUCTIONS[paceLevel],
+      requiredProgressIds,
+      requirementsSatisfied: requiredProgressIds.length === 0
+    },
     idleLimit: 2,
     consecutiveIdleTurns: state.director.consecutiveIdleTurns,
     player: {
@@ -245,7 +297,7 @@ function hasMeaningfulProgress(advanced, narration, contract) {
 
 function hasConcreteProgress(narration, contract) {
   const progress = narration?.progress && typeof narration.progress === 'object' ? narration.progress : {};
-  const advanced = Array.isArray(progress.advanced) ? progress.advanced.map((id) => cleanId(id)).filter(Boolean) : [];
+  const advanced = progressIds(narration);
   const exitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
   const recognizedAdvance = advanced.some((id) => id.startsWith('opening:') || exitIds.has(id)
     || contract.legalQuestIds.some((questId) => id === `quest:${questId}` || id.startsWith(`quest:${questId}:`)));
@@ -417,6 +469,21 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   }
   const chapterExitIds = new Set(contract.chapter.exits.map((exit) => exit.progressId));
   const advancesChapter = advanced.some((id) => chapterExitIds.has(id));
+  const progressKind = classifyChapterProgress(narration, contract);
+  if (contract.pace.level >= 1 && progressKind === 'minor' && !hasConcreteProgress(narration, contract)) {
+    errors.push('剧情需要产生与当前章节目标有关的可行动进展。');
+  }
+  if (contract.pace.level >= 2 && (!consequences.length || progressKind === 'minor')) {
+    errors.push('局势已停滞，必须通过自然事件产生主线后果。');
+  }
+  if (contract.pace.level >= 3) {
+    if (contract.pace.requirementsSatisfied && progressKind !== 'chapter') {
+      errors.push('必须自然呈现通往章节出口的决定性机会，并停在玩家选择前。');
+    } else if (!contract.pace.requirementsSatisfied
+      && !advanced.some((id) => contract.pace.requiredProgressIds.includes(id))) {
+      errors.push(`必须自然呈现通向缺失前置 ${contract.pace.requiredProgressIds.join('、')} 的决定性机会，并停在玩家选择前。`);
+    }
+  }
   if (contract.consecutiveIdleTurns >= contract.idleLimit && contract.chapter.exits.length
     && !hasMeaningfulProgress(advanced, narration, contract)) {
     errors.push('连续空转已达上限，本回合必须推动主线压力、线索、任务或有效支路。');
@@ -488,7 +555,7 @@ export function commitValidatedWorldTurn(source, contract, narration) {
   state.story.period = periodForMinute(state.story.minuteOfDay);
 
   const progress = narration.progress || {};
-  const advanced = Array.isArray(progress.advanced) ? progress.advanced.map((id) => cleanId(id)).filter(Boolean) : [];
+  const advanced = progressIds(narration);
   for (const [factId, fact] of Object.entries(AUTHORED_FACTS)) {
     if (!advanced.includes(fact.progressId) || state.memory.facts.some((entry) => entry.id === factId)) continue;
     state.memory.facts.push({
@@ -517,10 +584,19 @@ export function commitValidatedWorldTurn(source, contract, narration) {
 
   const chapter = CHAPTERS.find((candidate) => candidate.id === contract.chapter.id) || currentChapter(state);
   const exit = chapter.exits.find((candidate) => advanced.includes(candidate.progressId));
+  const progressKind = classifyChapterProgress(narration, contract);
+  state.director.chapterTurns = Math.min(999999, state.director.chapterTurns + 1);
+  state.director.turnsSinceChapterProgress = progressKind === 'minor'
+    ? Math.min(99, state.director.turnsSinceChapterProgress + 1)
+    : 0;
+  state.director.pacePressure = pressureLevel(state.director.turnsSinceChapterProgress, chapter.pace);
   state.director.consecutiveIdleTurns = hasMeaningfulProgress(advanced, narration, contract)
     ? 0
     : clamp(state.director.consecutiveIdleTurns + 1, 0, 10);
   if (exit) {
+    state.director.chapterTurns = 0;
+    state.director.turnsSinceChapterProgress = 0;
+    state.director.pacePressure = 0;
     const next = CHAPTERS.find((candidate) => candidate.id === exit.nextChapterId);
     if (next) {
       state.director.chapterId = next.id;

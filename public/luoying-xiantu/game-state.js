@@ -212,7 +212,8 @@ export function createGameState(name = '顾长生', mode = 'local', idFactory = 
     director: {
       chapterId: 'act1-awakening', sceneGoal: '逃离赵府并接触修行之门',
       dangerClocks: { zhaoPursuit: 0 }, openLoops: [],
-      consecutiveIdleTurns: 0, recentFingerprints: []
+      consecutiveIdleTurns: 0, recentFingerprints: [],
+      chapterTurns: 0, turnsSinceChapterProgress: 0, pacePressure: 0
     },
     quests: { active: [], completed: [], failed: [] },
     inventory: { items: { '回春丹': 1 }, materials: {}, limit: 36 },
@@ -287,7 +288,10 @@ function normalizeV3(input, expectedMode) {
     dangerClocks: safeMap(director.dangerClocks, { maxEntries: 30, min: 0, max: 100 }),
     openLoops: stringList(director.openLoops, 40, 80),
     consecutiveIdleTurns: Math.floor(clamp(director.consecutiveIdleTurns, 0, 10)),
-    recentFingerprints: stringList(director.recentFingerprints, 8, 240)
+    recentFingerprints: stringList(director.recentFingerprints, 8, 240),
+    chapterTurns: Math.floor(clamp(director.chapterTurns, 0, 999999)),
+    turnsSinceChapterProgress: Math.floor(clamp(director.turnsSinceChapterProgress, 0, 99)),
+    pacePressure: Math.floor(clamp(director.pacePressure, 0, 3))
   };
   base.quests = {
     active: safeQuestList(quests.active),
