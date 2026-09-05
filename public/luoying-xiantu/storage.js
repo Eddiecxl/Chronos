@@ -12,6 +12,17 @@ const autoKey = (mode) => `luoying_v3_${mode}_auto`;
 const slotKey = (mode, slot) => `luoying_v3_${mode}_${slot}`;
 const slotMetaKey = (mode, slot) => `${slotKey(mode, slot)}_meta`;
 const MAX_JOURNEY_BYTES = 4_500_000;
+const fallbackLockTails = new Map();
+
+function runFallbackExclusive(name, callback) {
+  const previous = fallbackLockTails.get(name) || Promise.resolve();
+  const running = previous.catch(() => {}).then(callback);
+  const tail = running.catch(() => {});
+  fallbackLockTails.set(name, tail);
+  return running.finally(() => {
+    if (fallbackLockTails.get(name) === tail) fallbackLockTails.delete(name);
+  });
+}
 
 function assertSlot(slot) {
   if (!validSlot(slot)) throw new Error('存档槽位无效。');
@@ -44,7 +55,10 @@ async function readJourneySource(source) {
 
 const defaultId = () => globalThis.crypto?.randomUUID?.() || `journey-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-export function createStorage(storage = globalThis.localStorage, { idFactory = defaultId } = {}) {
+export function createStorage(storage = globalThis.localStorage, {
+  idFactory = defaultId,
+  lockManager = globalThis.navigator?.locks
+} = {}) {
   if (!storage) throw new Error('当前环境不支持本地存档。');
 
   const freshJourneyId = () => {
@@ -103,7 +117,19 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
     return false;
   };
 
-  const writeAutoIfRevision = (mode, state, expectedJourneyId, expectedRevision = state?.revision) => {
+  const withAutoLock = (mode, callback) => {
+    const name = `luoying:v3:${mode}:autosave`;
+    if (lockManager?.request) return lockManager.request(name, { mode: 'exclusive' }, callback);
+    const isBrowserLocalStorage = typeof globalThis.window !== 'undefined' && storage === globalThis.localStorage;
+    if (isBrowserLocalStorage) {
+      return Promise.reject(new Error('当前浏览器不支持安全的跨窗口存档锁，AI 回合未写入。'));
+    }
+    return runFallbackExclusive(name, callback);
+  };
+
+  const writeAutoIfRevision = (
+    mode, state, expectedJourneyId, expectedRevision = state?.revision, expectedTransactionId = null
+  ) => {
     const expected = Number(expectedRevision);
     if (!Number.isSafeInteger(expected) || expected < 0) throw new Error('自动存档修订号无效。');
     const current = read(autoKey(mode), mode);
@@ -112,6 +138,9 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
     }
     if (current && current.revision !== expected) {
       throw new Error('自动存档修订已在另一窗口改变；本回合没有覆盖较新的进度。');
+    }
+    if (expectedTransactionId && current?.transactionJournal?.turn?.id !== expectedTransactionId) {
+      throw new Error('自动存档的待写回合已改变；没有清除另一窗口的事务记录。');
     }
     if (!current && expected !== 0) {
       throw new Error('自动存档已被移除或替换；本回合没有重建旧修订。');
@@ -131,9 +160,13 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
       storage.setItem(autoKey(mode), serializeState(mode, state));
       return read(autoKey(mode), mode);
     },
-    saveAutoIfJourney(mode, state, expectedJourneyId, expectedRevision = state?.revision) {
+    saveAutoIfJourney(
+      mode, state, expectedJourneyId, expectedRevision = state?.revision, expectedTransactionId = null
+    ) {
       assertMode(mode);
-      return writeAutoIfRevision(mode, state, expectedJourneyId, expectedRevision);
+      return withAutoLock(mode, () => writeAutoIfRevision(
+        mode, state, expectedJourneyId, expectedRevision, expectedTransactionId
+      ));
     },
     loadSlot(mode, slot) {
       assertMode(mode);
@@ -214,16 +247,21 @@ export function createStorage(storage = globalThis.localStorage, { idFactory = d
       const clean = migrateGameState(state, mode);
       const journal = clean.transactionJournal;
       if (!journal?.turn) return clean;
-      const current = read(autoKey(mode), mode);
-      if (current && current.journeyId !== clean.journeyId) {
-        throw new Error('自动存档已在另一窗口改变；没有恢复旧分支的待写回合。');
-      }
-      if (current && current.revision !== clean.revision) {
-        throw new Error('自动存档修订已在另一窗口改变；没有恢复旧修订的待写回合。');
-      }
-      await transcriptStore.appendTurn(clean.journeyId, journal.turn);
-      const recovered = migrateGameState({ ...clean, transactionJournal: null }, mode);
-      return writeAutoIfRevision(mode, recovered, clean.journeyId, clean.revision);
+      return withAutoLock(mode, async () => {
+        const current = read(autoKey(mode), mode);
+        if (current && current.journeyId !== clean.journeyId) {
+          throw new Error('自动存档已在另一窗口改变；没有恢复旧分支的待写回合。');
+        }
+        if (current && current.revision !== clean.revision) {
+          throw new Error('自动存档修订已在另一窗口改变；没有恢复旧修订的待写回合。');
+        }
+        if (current?.transactionJournal?.turn?.id !== journal.turn.id) {
+          throw new Error('自动存档的待写回合已改变；没有恢复另一窗口的事务记录。');
+        }
+        await transcriptStore.appendTurn(clean.journeyId, journal.turn);
+        const recovered = migrateGameState({ ...clean, transactionJournal: null }, mode);
+        return writeAutoIfRevision(mode, recovered, clean.journeyId, clean.revision, journal.turn.id);
+      });
     },
     getSlotMeta(mode, slot) {
       assertMode(mode);

@@ -175,13 +175,15 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
             transactionJournal: { type: 'ai-world-turn', turn }
           }, 'ai');
           if (stateStore.saveAutoIfJourney) {
-            journaled = stateStore.saveAutoIfJourney('ai', journaled, state.journeyId, state.revision);
+            journaled = await stateStore.saveAutoIfJourney('ai', journaled, state.journeyId, state.revision);
           } else journaled = stateStore.saveAuto('ai', journaled) || journaled;
           try {
             await transcriptStore.appendTurn(committed.journeyId, turn);
             committed = migrateGameState({ ...journaled, transactionJournal: null }, 'ai');
             if (stateStore.saveAutoIfJourney) {
-              committed = stateStore.saveAutoIfJourney('ai', committed, state.journeyId, journaled.revision);
+              committed = await stateStore.saveAutoIfJourney(
+                'ai', committed, state.journeyId, journaled.revision, txId
+              );
             } else committed = stateStore.saveAuto('ai', committed) || committed;
           } catch {
             committed = journaled;

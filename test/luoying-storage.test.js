@@ -46,27 +46,75 @@ test('local and AI autosaves never share a key', () => {
   assert.equal(adapter.loadAuto('ai').player.name, '万象身');
 });
 
-test('conditional autosave refuses to overwrite a different journey', () => {
+test('conditional autosave refuses to overwrite a different journey', async () => {
   const adapter = createStorage(memoryStorage());
   const first = createGameState('先行者', 'ai', () => 'journey-first');
   const stale = createGameState('迟到者', 'ai', () => 'journey-stale');
   adapter.saveAuto('ai', first);
-  assert.throws(() => adapter.saveAutoIfJourney('ai', stale, 'journey-stale'), /另一窗口|已改变/);
+  await assert.rejects(adapter.saveAutoIfJourney('ai', stale, 'journey-stale'), /另一窗口|已改变/);
   assert.equal(adapter.loadAuto('ai').journeyId, 'journey-first');
 });
 
-test('conditional autosave rejects a stale tab on the same journey revision', () => {
+test('conditional autosave rejects a stale tab on the same journey revision', async () => {
   const adapter = createStorage(memoryStorage());
   const original = createGameState('同路人', 'ai', () => 'shared-journey');
   adapter.saveAuto('ai', original);
   const tabA = structuredClone(adapter.loadAuto('ai'));
   const tabB = structuredClone(adapter.loadAuto('ai'));
   tabA.player.gold = 10;
-  const committedA = adapter.saveAutoIfJourney('ai', tabA, tabA.journeyId, tabA.revision);
+  const committedA = await adapter.saveAutoIfJourney('ai', tabA, tabA.journeyId, tabA.revision);
   assert.equal(committedA.revision, tabA.revision + 1);
   tabB.player.gold = 99;
-  assert.throws(() => adapter.saveAutoIfJourney('ai', tabB, tabB.journeyId, tabB.revision), /修订|另一窗口|已改变/);
+  await assert.rejects(adapter.saveAutoIfJourney('ai', tabB, tabB.journeyId, tabB.revision), /修订|另一窗口|已改变/);
   assert.equal(adapter.loadAuto('ai').player.gold, 10);
+});
+
+test('conditional AI autosaves request one origin-wide exclusive lock', async () => {
+  const calls = [];
+  let tail = Promise.resolve();
+  const lockManager = {
+    request(name, options, callback) {
+      calls.push({ name, options });
+      const running = tail.then(callback);
+      tail = running.catch(() => {});
+      return running;
+    }
+  };
+  const adapter = createStorage(memoryStorage(), { lockManager });
+  const original = createGameState('并发身', 'ai', () => 'locked-journey');
+  adapter.saveAuto('ai', original);
+  const tabA = structuredClone(adapter.loadAuto('ai'));
+  const tabB = structuredClone(adapter.loadAuto('ai'));
+  tabA.player.gold = 11;
+  tabB.player.gold = 22;
+  const results = await Promise.allSettled([
+    adapter.saveAutoIfJourney('ai', tabA, tabA.journeyId, tabA.revision),
+    adapter.saveAutoIfJourney('ai', tabB, tabB.journeyId, tabB.revision)
+  ]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every((call) => call.name === 'luoying:v3:ai:autosave' && call.options.mode === 'exclusive'));
+});
+
+test('journal finalization cannot clear a different transaction', async () => {
+  const adapter = createStorage(memoryStorage());
+  const original = createGameState('守卷人', 'ai', () => 'journal-journey');
+  adapter.saveAuto('ai', original);
+  const journaled = structuredClone(original);
+  journaled.transactionJournal = {
+    type: 'ai-world-turn',
+    turn: { id: 'tx-owner', kind: 'world', blocks: [{ type: 'narr', text: '本回合已落笔。' }] }
+  };
+  const prepared = await adapter.saveAutoIfJourney(
+    'ai', journaled, original.journeyId, original.revision
+  );
+  const finalized = { ...prepared, transactionJournal: null };
+  await assert.rejects(
+    adapter.saveAutoIfJourney('ai', finalized, prepared.journeyId, prepared.revision, 'tx-stranger'),
+    /待写回合|另一窗口|事务/
+  );
+  assert.equal(adapter.loadAuto('ai').transactionJournal.turn.id, 'tx-owner');
 });
 
 test('slot writes reject a mismatched mode', () => {
@@ -168,7 +216,7 @@ test('loading a manual AI slot activates its branch for the next conditional aut
   adapter.saveAuto('ai', live);
   const activated = adapter.activateSlotAsAuto('ai', 'slot1');
   activated.player.gold = 3;
-  assert.doesNotThrow(() => adapter.saveAutoIfJourney('ai', activated, snapshot.journeyId));
+  await assert.doesNotReject(adapter.saveAutoIfJourney('ai', activated, snapshot.journeyId));
   assert.equal(adapter.loadAuto('ai').journeyId, snapshot.journeyId);
   assert.equal(adapter.loadAuto('ai').player.gold, 3);
 });
