@@ -31,14 +31,15 @@ function characterDetails(state, name) {
 
 function questDetails(id, status, active = {}) {
   const entry = QUESTS[id];
+  const target = Math.max(1, Number(active.target || entry?.target || 1));
   return {
     id,
     status,
     title: entry?.title || id,
     type: entry?.type || 'unknown',
     description: entry?.description || '这段经历已被记录。',
-    progress: Math.max(0, Number(active.progress || 0)),
-    target: Math.max(1, Number(active.target || entry?.target || 1))
+    progress: status === 'completed' ? target : Math.max(0, Number(active.progress || 0)),
+    target
   };
 }
 

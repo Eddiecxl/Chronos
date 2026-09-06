@@ -37,6 +37,7 @@ export function equipOwnedItem(source, itemName, expectedMode = 'ai') {
   if (source?.mode !== expectedMode) throw new Error('存档模式不匹配。');
   const state = structuredClone(source);
   if (expectedMode === 'ai' && state.pending) throw new Error('当前行动仍在进行，暂不能更换装备。');
+  if (expectedMode === 'ai' && state.battle) throw new Error('战斗尚未结束，暂不能更换装备。');
   const item = ITEMS[itemName];
   if (!item?.slot) throw new Error('这件物品无法装备。');
   if ((state.inventory.items[itemName] || 0) < 1) throw new Error('尚未持有这件装备。');

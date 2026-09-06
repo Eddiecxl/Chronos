@@ -55,8 +55,20 @@ test('quest view retains completed work and reveals no future quest', () => {
   const view = buildQuestView(state);
 
   assert.equal(view.completed[0].id, 'escape-zhao');
+  assert.equal(view.completed[0].progress, view.completed[0].target);
   assert.equal(view.active[0].id, 'meet-elder');
   assert.equal(JSON.stringify(view).includes('outer-trial'), false);
+});
+
+test('completed legacy quest ids use a safe complete progress fallback', () => {
+  const state = createGameState('照月', 'ai', () => 'panels-legacy-completed');
+  state.quests.completed = ['legacy:forgotten-errand'];
+
+  const completed = buildQuestView(state).completed[0];
+
+  assert.equal(completed.id, 'legacy:forgotten-errand');
+  assert.equal(completed.target, 1);
+  assert.equal(completed.progress, completed.target);
 });
 
 test('inventory and codex only enrich committed discovery sources', () => {

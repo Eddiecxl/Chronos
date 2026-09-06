@@ -348,6 +348,30 @@ test('known NPC fact summaries may use the displayed actor name as their key', (
   assert.equal(validateAiWorldTurn(state, contract, narration, []).ok, true);
 });
 
+test('relationship effects require the same character to have visible validated dialogue evidence', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我询问林小满昨夜看见了什么', 'turn-relationship-evidence');
+  const withoutDialogue = narrationWithText('我把沾着黑砂的叶片摊在石阶上，等待林小满回应。');
+  withoutDialogue.effects = { relationships: { '林小满': 4 } };
+  const rejected = validateAiWorldTurn(state, contract, withoutDialogue, []);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.errors.some((error) => /关系.*对白|对白.*关系/.test(error)));
+
+  const withDialogue = {
+    ...withoutDialogue,
+    blocks: [...withoutDialogue.blocks, {
+      type: 'dlg', name: '林小满', text: '这片黑砂和我昨夜看到的足迹来自同一个方向。',
+      factIds: ['fact:forest-footprints']
+    }],
+    usedFactIdsByActor: { 'npc:lin-xiaoman': ['fact:forest-footprints'] }
+  };
+  const accepted = validateAiWorldTurn(state, contract, withDialogue, []);
+  assert.equal(accepted.ok, true);
+  const committed = commitValidatedWorldTurn(state, contract, withDialogue);
+  assert.equal(committed.relationships['林小满'], 4);
+  assert.equal(committed.memory.entities['npc:lin-xiaoman'].name, '林小满');
+});
+
 test('a world response with no progress is rejected', () => {
   const state = seededAiState();
   const contract = createSceneContract(state, '继续交谈', 'turn-8');

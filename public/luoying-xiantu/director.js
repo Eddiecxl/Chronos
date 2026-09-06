@@ -382,7 +382,15 @@ function similarity(left, right) {
   return intersection / (a.size + b.size - intersection);
 }
 
-function validateEffects(contract, effects, errors) {
+function validatedDialogueNames(contract, blocks) {
+  const actors = new Map(contract.actors.map((actor) => [actor.name, actor]));
+  return new Set(blocks
+    .filter((block) => block?.type === 'dlg' && actors.has(cleanText(block.name, 40)) && Array.isArray(block.factIds))
+    .map((block) => cleanText(block.name, 40))
+    .filter(Boolean));
+}
+
+function validateEffects(contract, effects, errors, dialogueNames = new Set()) {
   if (effects == null) return {};
   if (typeof effects !== 'object' || Array.isArray(effects)) {
     errors.push('数值效果必须是对象。');
@@ -419,6 +427,7 @@ function validateEffects(contract, effects, errors) {
         const value = Number(amount);
         if (!contract.legalRelationshipIds.includes(name)) errors.push(`未知关系角色：${name}。`);
         else if (!Number.isFinite(value) || value < -20 || value > 20) errors.push(`${name} 的关系变化超出限制。`);
+        else if (!dialogueNames.has(name)) errors.push(`关系角色 ${name} 必须有同回合可见且已验证的对白证据。`);
         else normalized.relationships[name] = value;
       }
     }
@@ -463,7 +472,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     if (!block || !['narr', 'dlg', 'sys'].includes(block.type) || !cleanText(block.text, 12_000)) errors.push('存在空白或非法内容块。');
     if (block?.type === 'dlg') {
       const actor = actorByName.get(cleanText(block.name, 40));
-      const generated = Array.isArray(narration.entities) && narration.entities.some((entity) => cleanText(entity?.name, 40) === cleanText(block.name, 40));
+      const generated = Array.isArray(narration.memory?.entities) && narration.memory.entities.some((entity) => cleanText(entity?.name, 40) === cleanText(block.name, 40));
       if (!actor && !generated) errors.push(`未登记角色不能发言：${cleanText(block.name, 40)}。`);
       if (actor?.status === 'dead') errors.push(`死亡角色不能发言：${actor.name}。`);
       if (!Array.isArray(block.factIds)) errors.push(`角色 ${actor?.id || cleanText(block.name, 40)} 的对白缺少逐段事实引用。`);
@@ -565,7 +574,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     || (Array.isArray(progress.resolvedLoops) && progress.resolvedLoops.length);
   if (narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
 
-  const normalizedEffects = validateEffects(contract, narration.effects || {}, errors);
+  const normalizedEffects = validateEffects(contract, narration.effects || {}, errors, validatedDialogueNames(contract, blocks));
   validateDecisiveOpportunityEffects(contract, advanced, normalizedEffects, errors);
   const actorById = new Map(contract.actors.flatMap((actor) => [[actor.id, actor], [actor.name, actor]]));
   for (const [actorId, factIds] of Object.entries(factsByActor)) {

@@ -53,8 +53,10 @@ test('responsive styles retain reachable controls and reduced motion support', a
 });
 
 test('mobile cover title scales within a 390px viewport without legacy suggestion styling', async () => {
-  const { css } = await readUi();
+  const { css, html } = await readUi();
   assert.match(css, /@media \(max-width: 680px\)[\s\S]*\.cover h1 \{[^}]*font-size:\s*clamp\(42px,\s*15vw,\s*56px\)/);
+  assert.match(css, /\.cover-content\s*\{[^}]*box-sizing:\s*border-box[^}]*width:\s*min\(980px,\s*100%\)/);
+  assert.doesNotMatch(html, /fonts\.googleapis\.com|fonts\.gstatic\.com/);
   assert.doesNotMatch(css, /\.suggestions/);
 });
 

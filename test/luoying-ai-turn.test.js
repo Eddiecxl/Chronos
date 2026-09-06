@@ -47,6 +47,21 @@ const validWorldResponse = (text = '门缝外掠过两道人影，林小满正�
   suggestions: ['从后窗离开', '制造声响引开追兵'], timeCost: 'brief'
 });
 
+const relationshipResponse = ({ dialogue = true } = {}) => JSON.stringify({
+  blocks: [
+    { type: 'narr', text: detailedFirstPerson('赵天霸站在门外，铁牌在灯影里轻轻晃动，我看清他暂时没有下令破门。') },
+    ...(dialogue ? [{ type: 'dlg', name: '赵天霸', text: '我是赵府的赵天霸，你若还想活命，就该出来说清楚。', factIds: ['fact:authored:zhao-tianba:identity'] }] : [])
+  ],
+  effects: { relationships: { '赵天霸': -4 } },
+  progress: { advanced: ['discovery:zhao-scouts'], consequences: ['赵天霸暂缓破门，柴房外的搜查仍在继续'], openLoops: ['loop:escape-route'], dangerClocks: { zhaoPursuit: 1 } },
+  memory: {
+    facts: [{ subjectId: 'world:pursuit', predicate: 'identified', object: '赵天霸暂时停在柴房门外观察动静', confidence: 1 }],
+    entities: []
+  },
+  usedFactIdsByActor: dialogue ? { 'npc:zhao-tianba': ['fact:authored:zhao-tianba:identity'] } : {},
+  suggestions: ['从后窗离开', '制造声响引开追兵'], timeCost: 'brief'
+});
+
 function runnerWithNarrator(narrate, transcriptStore = createTranscriptStore({ memory: new Map() })) {
   return createAiTurnRunner({ aiClient: { narrate }, transcriptStore, idFactory: () => 'tx-test', now: () => 1000 });
 }
@@ -168,6 +183,22 @@ test('successful turns persist transcript facts and generated entities only afte
   assert.equal(result.state.codex.characters.includes('林小满'), false);
 });
 
+test('AI relationship effects require visible validated dialogue before a complete world commit can change or discover a character', async () => {
+  const noDialogueState = seededAiState();
+  const withoutDialogue = await runnerWithNarrator(async () => relationshipResponse({ dialogue: false }))
+    .runWorld({ state: noDialogueState, input: '隔着门听赵天霸的动静', settings: { provider: 'groq' } });
+  assert.equal(withoutDialogue.ok, false);
+  assert.equal(withoutDialogue.state.relationships['赵天霸'], noDialogueState.relationships['赵天霸']);
+  assert.equal(withoutDialogue.state.codex.characters.includes('赵天霸'), false);
+
+  const dialogueState = seededAiState();
+  const withDialogue = await runnerWithNarrator(async () => relationshipResponse())
+    .runWorld({ state: dialogueState, input: '隔着门听赵天霸的动静', settings: { provider: 'groq' } });
+  assert.equal(withDialogue.ok, true);
+  assert.equal(withDialogue.state.relationships['赵天霸'], dialogueState.relationships['赵天霸'] - 4);
+  assert.equal(withDialogue.state.codex.characters.includes('赵天霸'), true);
+});
+
 test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {
   const transcriptStore = createTranscriptStore({ memory: new Map() });
   const state = seededAiState();
@@ -219,6 +250,50 @@ test('a final autosave conflict removes only this appended turn and returns the 
   assert.equal(result.ok, false);
   assert.equal(result.state.player.gold, 77);
   assert.deepEqual((await transcripts.allTurns(state.journeyId)).map((turn) => turn.id), ['existing']);
+});
+
+test('a final autosave conflict settles only its matching journal so recovery cannot resurrect the compensated turn', async () => {
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const storage = createStorage(memoryStorage());
+  const state = seededAiState();
+  storage.saveAuto('ai', state);
+  await transcripts.appendTurn(state.journeyId, {
+    id: 'existing', kind: 'world', blocks: [{ type: 'narr', text: '当前旅程已有的记录。' }]
+  });
+  await transcripts.appendTurn('other-journey', {
+    id: 'other-turn', kind: 'world', blocks: [{ type: 'narr', text: '另一旅程的记录。' }]
+  });
+  let saves = 0;
+  const stateStore = {
+    saveAuto: (...args) => storage.saveAuto(...args),
+    loadAuto: (...args) => storage.loadAuto(...args),
+    recoverPendingTurn: (...args) => storage.recoverPendingTurn(...args),
+    async saveAutoIfJourney(...args) {
+      saves += 1;
+      if (saves === 2) {
+        const otherTab = storage.loadAuto('ai');
+        otherTab.player.gold = 77;
+        await storage.saveAutoIfJourney('ai', otherTab, otherTab.journeyId, otherTab.revision);
+      }
+      return storage.saveAutoIfJourney(...args);
+    }
+  };
+  const runner = createAiTurnRunner({
+    aiClient: { narrate: async () => validWorldResponse() }, transcriptStore: transcripts, stateStore,
+    idFactory: () => 'tx-conflict-settle'
+  });
+
+  const result = await runner.runWorld({ state, input: '查看门缝', settings: { provider: 'groq' } });
+  const authoritative = storage.loadAuto('ai');
+  const recovered = await storage.recoverPendingTurn('ai', authoritative, transcripts);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.state.player.gold, 77);
+  assert.equal(authoritative.transactionJournal, null);
+  assert.equal(recovered.transactionJournal, null);
+  assert.equal(recovered.player.gold, 77);
+  assert.deepEqual((await transcripts.allTurns(state.journeyId)).map((turn) => turn.id), ['existing']);
+  assert.deepEqual((await transcripts.allTurns('other-journey')).map((turn) => turn.id), ['other-turn']);
 });
 
 test('a durable journal recovers a committed world turn after transcript storage fails', async () => {

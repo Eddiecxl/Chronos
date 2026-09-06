@@ -195,7 +195,22 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
               } catch (error) {
                 if (!transcriptStore.deleteTurn) throw new Error('自动存档冲突后无法补偿本回合记录。');
                 await transcriptStore.deleteTurn(committed.journeyId, turn.id);
-                failureState = stateStore.loadAuto?.('ai') || journaled;
+                const authoritative = stateStore.loadAuto?.('ai');
+                failureState = authoritative || journaled;
+                const journal = authoritative?.transactionJournal;
+                if (stateStore.saveAutoIfJourney
+                  && authoritative?.journeyId === state.journeyId
+                  && journal?.type === 'ai-world-turn'
+                  && journal.turn?.id === turn.id) {
+                  try {
+                    failureState = await stateStore.saveAutoIfJourney(
+                      'ai', migrateGameState({ ...authoritative, transactionJournal: null }, 'ai'),
+                      authoritative.journeyId, authoritative.revision, turn.id
+                    );
+                  } catch {
+                    failureState = stateStore.loadAuto?.('ai') || authoritative;
+                  }
+                }
                 throw error;
               }
             } else committed = stateStore.saveAuto('ai', committed) || committed;

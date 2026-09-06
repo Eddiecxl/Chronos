@@ -46,7 +46,7 @@ function addTechnique(state, name) {
 function relation(state, name, delta) {
   if (!(name in state.relationships)) return;
   state.relationships[name] = clamp(state.relationships[name] + delta, -100, 100);
-  uniquePush(state.codex.characters, name);
+  if (state.mode !== 'ai') uniquePush(state.codex.characters, name);
 }
 
 function unlockAchievement(state, id, blocks) {

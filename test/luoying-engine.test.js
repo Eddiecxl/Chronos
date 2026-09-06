@@ -62,6 +62,21 @@ test('AI spirit effects clamp against an equipped accessory cap without changing
   assert.equal(clampedAfterUnequip.player.spirit, 30);
 });
 
+test('AI relationship effects change affinity without discovering an unseen character, while local keeps legacy discovery', () => {
+  const ai = createGameState('照月', 'ai', () => 'ai-relationship-boundary');
+  const local = createGameState('照月', 'local', () => 'local-relationship-boundary');
+  ai.relationships['林小满'] = 0;
+  local.relationships['林小满'] = 0;
+
+  const aiApplied = applyValidatedEffects(ai, { relationships: { '林小满': 3 } });
+  const localApplied = applyValidatedEffects(local, { relationships: { '林小满': 3 } });
+
+  assert.equal(aiApplied.relationships['林小满'], 3);
+  assert.equal(aiApplied.codex.characters.includes('林小满'), false);
+  assert.equal(localApplied.relationships['林小满'], 3);
+  assert.equal(localApplied.codex.characters.includes('林小满'), true);
+});
+
 test('mercy path unlocks the guardian ending', () => {
   const state = createGameState();
   state.pending = { type: 'final-choice' };

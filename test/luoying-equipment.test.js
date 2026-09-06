@@ -58,6 +58,25 @@ test('AI equipment refuses to write while battle state exists', async () => {
   assert.deepEqual(source.battle, { enemyId: 'wolf', hp: 23 });
 });
 
+test('low-level AI equipment rejects battle and pending states while local equipment remains unchanged', () => {
+  const battle = createGameState('照月', 'ai', () => 'battle-direct-gear');
+  battle.pending = null;
+  battle.inventory.items['踏云履'] = 1;
+  battle.battle = { enemyId: 'wolf', hp: 23 };
+  assert.throws(() => equipOwnedItem(battle, '踏云履', 'ai'), /战斗/);
+
+  const pending = createGameState('照月', 'ai', () => 'pending-direct-gear');
+  pending.pending = { type: 'intro-escape' };
+  pending.inventory.items['踏云履'] = 1;
+  assert.throws(() => equipOwnedItem(pending, '踏云履', 'ai'), /进行|待处理/);
+
+  const local = createGameState('照月', 'local', () => 'local-direct-gear');
+  local.pending = { type: 'intro-escape' };
+  local.battle = { enemyId: 'wolf', hp: 23 };
+  local.inventory.items['踏云履'] = 1;
+  assert.equal(equipOwnedItem(local, '踏云履', 'local').equipment.slots.feet, '踏云履');
+});
+
 test('AI equipment refuses pending state before it mutates or saves', async () => {
   const source = createGameState('照月', 'ai', () => 'pending-gear');
   source.pending = { type: 'intro-escape' };
