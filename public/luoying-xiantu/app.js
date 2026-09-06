@@ -54,7 +54,9 @@ let pending = false;
 let equipmentPending = false;
 let retryContext = null;
 let aiSettings = aiClient.loadSettings();
-let runtimeKey = '';
+const runtimeKeys = new Map();
+let editingProvider = '';
+let retryTicker = null;
 let toastTimer;
 let activeRequest = null;
 let storyFrame = 0;
@@ -260,17 +262,31 @@ async function runLocalChoice(choiceId, label) {
 function showRetry(result, type) {
   retryContext = { type, ...result.retry };
   const message = String(result.error || 'AI 回合失败').replace(/[。.!！]+$/u, '');
-  dom.retryMessage.textContent = `${message}。世界仍停在行动前；可重试、换模型或修改输入。`;
+  const blocked = ['AI_QUOTA_EXHAUSTED', 'AI_MODEL_UNAVAILABLE', 'AI_AUTH_FAILED', 'AI_NOT_CONFIGURED', 'AI_BAD_REQUEST'].includes(result.code);
+  dom.retryMessage.textContent = `${message}。世界仍停在行动前，输入和已保存记忆不变。${blocked ? '请先到 AI 设置处理，重复点击不会解决这个问题。' : ''}`;
+  const deadline = Date.now() + (result.retryAfterMs || 0);
+  clearInterval(retryTicker);
+  const refresh = () => {
+    const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+    dom.retryButton.disabled = blocked || seconds > 0;
+    dom.retryButton.textContent = blocked ? '请先调整 AI 设置' : seconds > 0 ? `额度冷却 · ${seconds} 秒` : '重试本回合';
+    if (!seconds) { clearInterval(retryTicker); retryTicker = null; }
+  };
+  if (result.retryAfterMs) retryTicker = setInterval(refresh, 1000);
+  refresh();
   dom.retryPanel.hidden = false;
 }
 
 function clearRetry() {
+  clearInterval(retryTicker); retryTicker = null;
+  dom.retryButton.disabled = false;
+  dom.retryButton.textContent = '重试本回合';
   retryContext = null;
   dom.retryPanel.hidden = true;
 }
 
 function currentAiSettings() {
-  return { ...aiSettings, key: runtimeKey };
+  return { ...aiSettings, key: runtimeKeys.get(aiSettings.provider) || '' };
 }
 
 async function requestTurn(kind, input, transactionId) {
@@ -912,7 +928,13 @@ function syncAiFields(resetModel = false) {
   const id = dom.providerSelect.value;
   const provider = PROVIDERS[id];
   const none = provider.credentialMode === 'none';
-  const siteCapable = ['groq', 'mistral', 'gemini'].includes(id);
+  const siteCapable = provider.siteCapable;
+  if (resetModel && editingProvider && editingProvider !== id) {
+    runtimeKeys.set(editingProvider, dom.apiKeyInput.value.trim());
+    dom.apiKeyInput.value = runtimeKeys.get(id) || '';
+    dom.credentialSelect.value = provider.credentialMode;
+  }
+  editingProvider = id;
   if (!siteCapable && !none) dom.credentialSelect.value = 'personal';
   dom.credentialSelect.querySelector('option[value="site"]').disabled = !siteCapable;
   dom.credentialField.hidden = none;
@@ -937,7 +959,8 @@ function syncAiFields(resetModel = false) {
 function openAiDialog() {
   populateProviderSelect(dom.providerSelect, aiSettings.provider);
   dom.credentialSelect.value = aiSettings.credentialMode;
-  dom.apiKeyInput.value = runtimeKey;
+  dom.apiKeyInput.value = runtimeKeys.get(aiSettings.provider) || '';
+  editingProvider = aiSettings.provider;
   dom.modelInput.value = aiSettings.model || PROVIDERS[aiSettings.provider]?.model || '';
   populateProviderSelect(dom.trialProviderA, 'groq');
   populateProviderSelect(dom.trialProviderB, 'mistral');
@@ -964,8 +987,13 @@ function saveAiSettings() {
     dom.connectionStatus.textContent = '这个模型不在网站允许列表中，请从模型建议中选择。';
     return;
   }
-  runtimeKey = collected.key;
+  runtimeKeys.set(collected.provider, collected.key);
   aiSettings = aiClient.saveSettings(collected);
+  // A newly selected provider/key may have independent quota; the client still
+  // enforces any existing cooldown for the exact credential/model combination.
+  clearInterval(retryTicker); retryTicker = null;
+  dom.retryButton.disabled = false;
+  dom.retryButton.textContent = '用当前设置重试';
   renderTopbar();
   dom.connectionStatus.textContent = '已保存。下一次 AI 请求立即使用这个提供商；当前旅程与记忆保持不变。';
   showToast('AI 模型已切换');
@@ -989,8 +1017,8 @@ function settingsForTrial(providerId) {
   const same = providerId === dom.providerSelect.value;
   return {
     provider: providerId,
-    credentialMode: provider.credentialMode === 'none' ? 'none' : ['groq', 'mistral', 'gemini'].includes(providerId) ? 'site' : 'personal',
-    key: same ? dom.apiKeyInput.value.trim() : '',
+    credentialMode: same ? dom.credentialSelect.value : provider.credentialMode,
+    key: same ? dom.apiKeyInput.value.trim() : runtimeKeys.get(providerId) || '',
     model: same ? dom.modelInput.value.trim() : provider.model,
     baseUrl: provider.baseUrl || ''
   };
@@ -1075,7 +1103,7 @@ dom.credentialSelect.addEventListener('change', () => syncAiFields());
 dom.saveAiButton.addEventListener('click', saveAiSettings);
 dom.testAiButton.addEventListener('click', testAiConnection);
 dom.clearCredentialButton.addEventListener('click', () => {
-  runtimeKey = '';
+  runtimeKeys.clear();
   dom.apiKeyInput.value = '';
   localStorage.removeItem('luoying_ai_v3');
   aiSettings = aiClient.loadSettings();

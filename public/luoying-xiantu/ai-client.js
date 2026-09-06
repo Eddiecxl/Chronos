@@ -1,22 +1,29 @@
 import { derivedPlayerStats } from './equipment.js';
 import { generationOptions, throwIfCancelled } from './ai-policy.js';
+import { aiHttpError, retryAfterMs } from './ai-errors.js';
 
 const SETTINGS_KEY = 'luoying_ai_v3';
 const SESSION_KEY = 'chronos-session-token-v1';
 
 export const PROVIDERS = {
+  openai: {
+    label: 'OpenAI · 官方 API', model: 'gpt-4.1-mini', baseUrl: 'https://api.openai.com/v1',
+    credentialMode: 'personal', siteCapable: true, recommended: true,
+    tip: '付费 API，与 ChatGPT 会员分开计费。4.1 mini 适合低成本测试；5.4 mini、5.6 Terra 可对比。尚需用自己的额度实测叙事与连续游玩。',
+    models: ['gpt-4.1-mini', 'gpt-5.4-mini', 'gpt-5.6-terra']
+  },
   groq: {
     label: 'Groq · GPT-OSS', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1',
-    credentialMode: 'site', recommended: true, tip: '高速长文本叙事；可用 Chronos 网站额度或自己的 Groq Key。',
+    credentialMode: 'site', siteCapable: true, recommended: true, tip: '响应快，但免费额度容易限流；网站和个人模式的额度取决于对应 Groq 账户。',
     models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b', 'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b']
   },
   mistral: {
     label: 'Mistral', model: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1',
-    credentialMode: 'site', recommended: true, tip: '稳定、节奏明快；可用网站额度或自己的 Mistral Key。'
+    credentialMode: 'site', siteCapable: true, recommended: true, tip: '备选叙事服务；需要有效 Mistral API 额度。未配置网站 Key 时请使用个人模式。'
   },
   gemini: {
-    label: 'Google Gemini', model: 'gemini-3.6-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', credentialMode: 'site', advanced: true,
-    tip: '稳定长上下文叙事；支持网站额度或个人 Google AI Studio Key。',
+    label: 'Google Gemini', model: 'gemini-3.6-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', credentialMode: 'site', siteCapable: true, advanced: true,
+    tip: '保留原有模型选择；模型访问权限和免费额度须以 Google AI Studio 当前账户为准。',
     models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']
   },
   siliconflow: {
@@ -116,7 +123,7 @@ function normalizeEffects(effects) {
   const source = effects && typeof effects === 'object' && !Array.isArray(effects) ? effects : {};
   const output = {};
   for (const key of ['hp', 'qi', 'spirit', 'gold']) if (source[key] !== undefined) output[key] = Number(source[key]);
-  if (typeof source.location === 'string') output.location = cleanText(source.location, 80);
+  if (typeof source.location === 'string' && source.location.trim()) output.location = cleanText(source.location, 80);
   for (const key of ['addItems', 'relationships', 'questProgress']) {
     if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
       output[key] = Object.fromEntries(Object.entries(source[key]).slice(0, 30)
@@ -209,10 +216,10 @@ function normalizeMessages(messages) {
 function normalizeSettings(input = {}) {
   const provider = PROVIDERS[input.provider] ? input.provider : 'groq';
   const defaults = PROVIDERS[provider];
-  const siteCapable = ['groq', 'mistral', 'gemini'].includes(provider);
+  const siteCapable = defaults.siteCapable;
   const credentialMode = defaults.credentialMode === 'none'
     ? 'none'
-    : siteCapable && input.credentialMode !== 'personal'
+    : siteCapable && (input.credentialMode || defaults.credentialMode) === 'site'
       ? 'site'
       : 'personal';
   const baseUrl = provider === 'custom' ? cleanText(input.baseUrl, 300).replace(/\/+$/, '') : defaults.baseUrl || '';
@@ -240,16 +247,12 @@ function extractGemini(data) {
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function retryWaitMs(response, data, fallback) {
-  const headerSeconds = Number(response?.headers?.get?.('retry-after'));
-  const message = String(data?.error?.message || data?.error || '');
-  const messageSeconds = Number(message.match(/try again in\s+([\d.]+)s/i)?.[1]);
-  const seconds = Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : messageSeconds;
-  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
-  return Math.max(250, Math.min(30_000, Math.ceil(seconds * 1_000)));
-}
-
-async function requestJson(fetchImpl, url, options, attempts = 2, sleep = delay) {
+async function requestJson(fetchImpl, url, options, attempts = 2, sleep = delay, cooldowns = new Map()) {
+  const body = JSON.parse(options.body || '{}');
+  const bucket = JSON.stringify([url, body.provider, body.model, options.headers?.Authorization, options.headers?.['x-goog-api-key']]);
+  const cached = cooldowns.get(bucket);
+  const remaining = (cached?.until || 0) - Date.now();
+  if (remaining > 0) throw Object.assign(new Error(cached.message), { code: cached.code, status: cached.status, retryAfterMs: remaining });
   const parentSignal = options.signal;
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -259,17 +262,20 @@ async function requestJson(fetchImpl, url, options, attempts = 2, sleep = delay)
   throwIfCancelled(parentSignal);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
       const response = await fetchImpl(url, { ...options, signal: controller.signal });
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
       throwIfCancelled(parentSignal);
       if (response.ok) return data;
-      const message = data?.error?.message || data?.error || `HTTP ${response.status}`;
-      if (response.status === 429) {
-        const seconds = Math.ceil((data.retryAfterMs || retryWaitMs(response, data, 10_000)) / 1000);
-        throw new Error(`当前模型额度繁忙，约 ${seconds} 秒后再试，或切换模型。`);
+      const failure = aiHttpError(response, data, url.startsWith('/'));
+      if (response.status === 429 || failure.retryAfterMs > 1500 || attempt === attempts - 1) {
+        if (failure.retryAfterMs) {
+          if (cooldowns.size > 100) cooldowns.clear();
+          cooldowns.set(bucket, { until: Date.now() + failure.retryAfterMs, code: failure.code, message: failure.message, status: failure.status });
+        }
+        throw failure;
       }
-      if (![502, 503].includes(response.status) || attempt === attempts - 1) throw new Error(String(message));
-      const waitMs = retryWaitMs(response, data, 500);
-      if (waitMs > 1500) throw new Error(String(message));
+      if (![502, 503].includes(response.status) || failure.code !== 'AI_UPSTREAM_FAILED') throw failure;
+      const waitMs = retryAfterMs(response, data, 500);
+      if (waitMs > 1500) throw failure;
       await sleep(waitMs);
       throwIfCancelled(parentSignal);
       if (controller.signal.aborted) throw new Error('AI 请求超时，请重试或切换模型。');
@@ -286,6 +292,7 @@ async function requestJson(fetchImpl, url, options, attempts = 2, sleep = delay)
 
 export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, sleep = delay } = {}) {
   if (!fetchImpl) throw new Error('当前环境不支持网络请求。');
+  const cooldowns = new Map();
   const client = {
     loadSettings() {
       try { return normalizeSettings(JSON.parse(storage?.getItem(SETTINGS_KEY) || '{}')); }
@@ -303,7 +310,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
       const requestType = cleanText(context.requestType || 'world', 20);
       const transactionId = cleanText(context.transactionId, 100);
 
-      if (settings.credentialMode === 'site' && ['gemini', 'groq', 'mistral'].includes(settings.provider)) {
+      if (settings.credentialMode === 'site' && PROVIDERS[settings.provider].siteCapable) {
         const token = storage?.getItem(SESSION_KEY) || '';
         if (!token) throw new Error('请先登录 Chronos 再使用网站 AI。');
         const data = await requestJson(fetchImpl, '/api/game/ai', {
@@ -311,7 +318,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ provider: settings.provider, model: settings.model, messages, requestType, transactionId })
-        }, 1, sleep);
+        }, 1, sleep, cooldowns);
         if (typeof data?.text !== 'string' || !data.text.trim()) throw new Error('网站 AI 返回为空。');
         return data.text;
       }
@@ -329,7 +336,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.key },
           body: JSON.stringify({ systemInstruction: { parts: [{ text: systemText }] }, contents, generationConfig: generationOptions('gemini', settings.model, requestType) })
-        }, 2, sleep);
+        }, 2, sleep, cooldowns);
         return extractGemini(data);
       }
 
@@ -342,7 +349,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
         body: JSON.stringify({
           model: settings.model, messages, ...generationOptions(settings.provider, settings.model, requestType)
         })
-      }, 2, sleep);
+      }, 2, sleep, cooldowns);
       return extractOpenAi(data);
     },
     async testConnection(settings) {

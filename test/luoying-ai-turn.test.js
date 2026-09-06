@@ -71,6 +71,38 @@ function runnerWithNarrator(narrate, transcriptStore = createTranscriptStore({ m
   return createAiTurnRunner({ aiClient: { narrate }, transcriptStore, idFactory: () => 'tx-test', now: () => 1000 });
 }
 
+test('unsupported optional world memory is dropped without rewriting valid AI story or a second request', async () => {
+  const candidate = JSON.parse(validWorldResponse());
+  candidate.memory.facts.push({ subjectId: 'world:noise', predicate: 'location', object: '门缝处', confidence: 1 });
+  let calls = 0;
+  const result = await runnerWithNarrator(async () => { calls++; return JSON.stringify(candidate); })
+    .runWorld({ state: seededAiState(), input: '我查看门缝' });
+  assert.equal(result.ok, true);
+  assert.equal(calls, 1);
+  assert.deepEqual(result.blocks, candidate.blocks);
+  assert.ok(result.state.memory.facts.some(fact => fact.object === candidate.memory.facts[0].object));
+  assert.ok(!result.state.memory.facts.some(fact => fact.object === '门缝处'));
+});
+
+test('an empty optional location means no movement, not an illegal destination', async () => {
+  const candidate = JSON.parse(validWorldResponse());
+  candidate.effects.location = '  ';
+  let calls = 0;
+  const result = await runnerWithNarrator(async () => { calls++; return JSON.stringify(candidate); })
+    .runWorld({ state: seededAiState(), input: '我查看门缝' });
+  assert.equal(result.ok, true);
+  assert.equal(calls, 1);
+  assert.equal(result.state.story.location, '赵府柴房');
+});
+
+test('optional memory cleanup cannot bypass hidden-character discovery protection', async () => {
+  const candidate = JSON.parse(validWorldResponse());
+  candidate.memory.facts.push({ subjectId: 'world:hidden', predicate: 'secret', object: '苏晚晴正在屋外等候', confidence: 1 });
+  const result = await runnerWithNarrator(async () => JSON.stringify(candidate))
+    .runWorld({ state: seededAiState(), input: '我查看门缝' });
+  assert.equal(result.ok, false);
+});
+
 test('world runner ignores legacy suggestions in AI responses and stored turns', async () => {
   const transcriptStore = createTranscriptStore({ memory: new Map() });
   const runner = runnerWithNarrator(async () => validWorldResponse(), transcriptStore);

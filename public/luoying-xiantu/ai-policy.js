@@ -2,6 +2,10 @@
 export function generationOptions(provider, model, requestType = 'world') {
   const tokens = requestType === 'trial' ? 1000 : requestType === 'system' ? 1200 : 3200;
   if (provider === 'gemini') return { temperature: 0.75, maxOutputTokens: tokens, responseMimeType: 'application/json' };
+  if (provider === 'openai') return {
+    max_completion_tokens: tokens, response_format: { type: 'json_object' },
+    ...(/^gpt-5/.test(model) ? { reasoning_effort: /^gpt-5(?:-mini|-nano|$)/.test(model) ? 'minimal' : 'none' } : { temperature: 0.75 })
+  };
   if (provider === 'groq') return {
     temperature: 0.75, max_completion_tokens: tokens,
     response_format: { type: 'json_object' },

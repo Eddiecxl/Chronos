@@ -29,6 +29,16 @@ for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['mo
   assert.equal(await page.inputValue('#baseUrlInput'), 'https://api.groq.com/openai/v1');
   await page.selectOption('#providerSelect', 'gemini');
   assert.equal(await page.inputValue('#baseUrlInput'), 'https://generativelanguage.googleapis.com/v1beta');
+  await page.selectOption('#credentialSelect', 'personal');
+  await page.fill('#apiKeyInput', 'gemini-test-only');
+  await page.selectOption('#providerSelect', 'openai');
+  assert.equal(await page.inputValue('#baseUrlInput'), 'https://api.openai.com/v1');
+  assert.equal(await page.inputValue('#modelInput'), 'gpt-4.1-mini');
+  assert.equal(await page.inputValue('#credentialSelect'), 'personal');
+  assert.equal(await page.inputValue('#apiKeyInput'), '', 'keys must not cross provider boundaries');
+  await page.fill('#apiKeyInput', 'openai-test-only');
+  await page.selectOption('#providerSelect', 'gemini');
+  assert.equal(await page.inputValue('#apiKeyInput'), 'gemini-test-only');
   await page.selectOption('#providerSelect', 'custom');
   await page.fill('#baseUrlInput', 'https://example.com/v1');
   await page.fill('#modelInput', 'test-model');
@@ -63,6 +73,8 @@ for (const [label, viewport] of [['desktop', { width: 1440, height: 900 }], ['mo
   await page.waitForSelector('#retryPanel:not([hidden])');
   assert.equal(calls, 2, 'quota errors must not cause nested retries');
   assert.equal(await page.inputValue('#playerInput'), '我准备问第二个问题');
+  assert.equal(await page.locator('#retryButton').isDisabled(), true);
+  await page.waitForFunction(() => !document.querySelector('#retryButton').disabled);
   await page.click('#editRetryButton');
   await page.fill('#playerInput', '我等待回应');
   await page.click('#sendButton');

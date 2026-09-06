@@ -741,7 +741,10 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (/\b(?:qi|spirit|hp|maxHp|maxSpirit|effects|progress|timeCost|factIds|usedFactIdsByActor)\b/iu.test(narrationText)) {
     errors.push('旁白泄漏了内部字段；可见剧情必须使用灵气、灵力、气血等中文游戏术语。');
   }
-  if (FIRST_PERSON_DECISIONS.some(({ output, input }) => output.test(narrationText) && !input.test(contract.playerInput))) {
+  // Modal necessity describes an unresolved choice, not a committed action.
+  // Only mask the modal phrase; later actual decisions still undergo validation.
+  const agencyText = narrationText.replace(/(?:必须|需要|尚待)(?:立刻|马上|尽快)?(?:作出)?(?:决定|选择)/gu, '尚待抉择');
+  if (FIRST_PERSON_DECISIONS.some(({ output, input }) => output.test(agencyText) && !input.test(contract.playerInput))) {
     errors.push('AI 不得擅自替玩家补写第一人称的选择、承诺、对白或感情。');
   }
   validateNarratedResources(contract, narration, narrationText, errors);
@@ -764,6 +767,9 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     ? progress.consequences.map((value) => cleanText(value, 160)).filter(Boolean)
     : [];
   const openingTurn = advanced.some((id) => id.startsWith('opening:'));
+  if (openingTurn && (state.memory.turnCount > 0 || advanced.some(id => id.startsWith('opening:') && id !== 'opening:awakened'))) {
+    errors.push('开篇标记只能用于首次苏醒，不能代替后续世界回合的实际进展。');
+  }
   if (!openingTurn && !consequences.length) errors.push('世界回合必须写明行动造成的具体后果。');
   if (!hasConcreteProgress(narration, contract)) {
     errors.push('世界回合缺少实际进展：必须改变状态、记忆、危险、悬念、任务或章节，不能只填写装饰性 scene 标签。');
@@ -828,7 +834,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   const hasClockChange = progress.dangerClocks && Object.values(progress.dangerClocks).some((value) => Number(value) !== 0);
   const hasLoopChange = (Array.isArray(progress.openLoops) && progress.openLoops.length)
     || (Array.isArray(progress.resolvedLoops) && progress.resolvedLoops.length);
-  if (narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
+  if (!openingTurn && narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
 
   const normalizedEffects = validateEffects(contract, narration.effects || {}, errors, validatedDialogueNames(contract, blocks));
   validateQuestLifecycle(state, contract, normalizedEffects, errors);

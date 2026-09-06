@@ -190,6 +190,6 @@ test('per-account rolling minute limits do not affect another account', async ()
     fetchImpl: async () => jsonResponse({ choices: [{ message: { content: 'ok' } }] })
   });
   for (let index = 0; index < 12; index += 1) await service.generate('one', { ...validRequest('groq'), transactionId: `tx-${index}` });
-  await assert.rejects(service.generate('one', { ...validRequest('groq'), transactionId: 'tx-limit' }), (error) => error.code === 'AI_RATE_LIMITED');
+  await assert.rejects(service.generate('one', { ...validRequest('groq'), transactionId: 'tx-limit' }), (error) => error.code === 'AI_SITE_LIMITED' && error.retryAfterMs === 60000);
   assert.equal((await service.generate('two', validRequest('groq'))).text, 'ok');
 });

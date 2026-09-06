@@ -6,7 +6,7 @@ import {
 import {
   applyMemoryCandidates, registerEntityCandidates, selectRelevantMemory, updateChapterSummary
 } from './memory.js';
-import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, storyVisibleTextFor } from './discovery.js';
+import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, storyVisibleTextFor, hasVisibleFactEvidence } from './discovery.js';
 import { answerSystemQuery } from './turn-router.js';
 import { LOCATIONS } from './game-data.js';
 import { throwIfCancelled } from './ai-policy.js';
@@ -15,7 +15,7 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 规则：
 1. 严格遵守场景契约、已知事实、死亡状态、地点和数值上限。
 2. 所有 narr 旁白必须使用主角第一人称“我”，绝不能以“你、主角、玩家”称呼主角。只写我亲眼所见、亲耳所闻、身体感受及有依据的推断；不得切换到场外角色的内心、秘密行动或全知视角。
-3. 逐字尊重玩家原话。不得替我新增对白、承诺、选择、立场、感情或未输入的关键动作；玩家未决定的事必须停在可选择处。
+3. 逐字尊重玩家原话。不得替我新增对白、承诺、选择、立场、感情或未输入的关键动作；玩家未决定的事必须停在可行动的当下。不要列出选项或问“选择哪个”，玩家只自由输入。不得编造我在开篇前炼丹、服药、许诺或修炼等既往经历。
 4. 普通世界回合应有约 260–700 个中文字，用具体场面依次展现“我的行动发生 → 环境或 NPC 反应 → 明确结果 → 新线索、代价或局势推进”，不得摘要带过、复述、拖延或绕圈。
 5. 每回合必须产生可验证的新事实、数值/关系/地点变化、危险时钟变化、新开/解决的悬念或章节/任务进展；不能只填写装饰性的 scene 标签。
 6. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。场景契约 player 内的 qi、spirit 与上限是绝对事实；正文若提到当前数值或充盈/耗尽状态，必须与它完全一致。qi、spirit、hp、effects、progress 等 JSON 字段只用于结构，绝不能出现在玩家可见正文，正文统一写“灵气、灵力、气血”等中文术语。
@@ -99,6 +99,8 @@ function failure(error, input, transactionId, contract, state) {
   return {
     ok: false,
     error: cleanText(error?.message || error || 'AI 回合失败。', 600),
+    code: error?.code || 'AI_TURN_FAILED',
+    ...(error?.retryAfterMs ? { retryAfterMs: error.retryAfterMs } : {}),
     retry: { input, transactionId, contract },
     ...(state ? { state } : {})
   };
@@ -155,6 +157,17 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
         try {
           narration = narrationFrom(raw, requestType);
           validation = validateAiWorldTurn(state, contract, narration, recentTurns);
+          // Optional bookkeeping must not trigger another generation when the
+          // story itself is valid. Never invent substitute text or facts, and
+          // never suppress discovery, agency, state, or progression errors.
+          if (!validation.ok && validation.errors.length && validation.errors.every(error =>
+            /^世界记忆事实 world:.+ 缺少本回合可见正文的直接证据。$/u.test(error))) {
+            const visible = storyVisibleTextFor(narration);
+            const grounded = { ...narration, memory: { ...narration.memory,
+              facts: narration.memory.facts.filter(fact => !fact.subjectId.startsWith('world:') || hasVisibleFactEvidence(fact, visible)) } };
+            const checked = validateAiWorldTurn(state, contract, grounded, recentTurns);
+            if (checked.ok) { narration = grounded; validation = checked; }
+          }
         } catch (error) {
           narration = { blocks: [], raw: cleanText(raw, 12_000) };
           validation = { ok: false, errors: [error.message], fingerprint: '' };
@@ -167,7 +180,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           ];
         }
       }
-      if (!validation?.ok) throw new Error(`AI 内容连续 ${maxAttempts} 次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
+      if (!validation?.ok) throw Object.assign(new Error(`AI 剧情未通过因果校验（不是网络限流）：${validation?.errors?.join('；') || '未知结构错误'}`), { code: 'AI_NARRATIVE_INVALID' });
       throwIfCancelled(signal);
       onProgress('saving');
 

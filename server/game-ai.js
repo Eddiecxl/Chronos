@@ -1,6 +1,12 @@
 import { generationOptions } from '../public/luoying-xiantu/ai-policy.js';
+import { aiHttpError, retryAfterMs } from '../public/luoying-xiantu/ai-errors.js';
 
 const PROVIDER_CONFIG = {
+  openai: {
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    keyName: 'OPENAI_API_KEY', modelName: 'OPENAI_MODEL', defaultModel: 'gpt-4.1-mini', protocol: 'openai',
+    allowedModels: ['gpt-4.1-mini', 'gpt-5.4-mini', 'gpt-5.6-terra']
+  },
   groq: {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
     keyName: 'GROQ_API_KEY', modelName: 'GROQ_MODEL', defaultModel: 'openai/gpt-oss-120b', protocol: 'openai',
@@ -78,7 +84,9 @@ function rateLimiter(now) {
     const daily = previous.filter((timestamp) => timestamp > current - 86_400_000);
     const minuteCount = daily.filter((timestamp) => timestamp > current - 60_000).length;
     if (minuteCount >= MINUTE_LIMIT || daily.length >= DAY_LIMIT) {
-      throw new GameAiError('AI 请求过于频繁，请稍后再试。', 'AI_RATE_LIMITED', 429);
+      const wait = daily.length >= DAY_LIMIT ? daily[0] + 86400000 - current
+        : daily.filter((timestamp) => timestamp > current - 60000)[0] + 60000 - current;
+      throw Object.assign(new GameAiError('Chronos 网站保护额度已到，请稍后再试或使用个人 API。', 'AI_SITE_LIMITED', 429), { retryAfterMs: Math.max(1, wait) });
     }
     daily.push(current);
     records.set(account, daily);
@@ -117,21 +125,6 @@ function extractText(provider, data) {
     if (typeof text === 'string' && text.trim()) return text;
   }
   throw new GameAiError('AI 上游返回为空。', 'AI_UPSTREAM_FAILED', 502);
-}
-
-function upstreamError(status) {
-  if (status === 401 || status === 403) return new GameAiError('网站 AI 凭据暂时无效。', 'AI_AUTH_FAILED', 503);
-  if (status === 429) return new GameAiError('AI 上游正忙，请稍后重试。', 'AI_RATE_LIMITED', 429);
-  return new GameAiError('AI 上游暂时不可用。', 'AI_UPSTREAM_FAILED', 502);
-}
-
-function retryWaitMs(response, data, fallback = 900) {
-  const headerSeconds = Number(response?.headers?.get?.('retry-after'));
-  const message = String(data?.error?.message || data?.error || '');
-  const messageSeconds = Number(message.match(/try again in\s+([\d.]+)s/i)?.[1]);
-  const seconds = Number.isFinite(headerSeconds) && headerSeconds > 0 ? headerSeconds : messageSeconds;
-  if (!Number.isFinite(seconds) || seconds <= 0) return fallback;
-  return Math.max(250, Math.min(30_000, Math.ceil(seconds * 1_000)));
 }
 
 export function createGameAiService({
@@ -176,14 +169,16 @@ export function createGameAiService({
           const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
+            const classified = aiHttpError(response, errorData);
+            const failure = Object.assign(new GameAiError(classified.message, classified.code,
+              response.status === 401 || response.status === 403 ? 503 : response.status),
+              classified.retryAfterMs ? { retryAfterMs: classified.retryAfterMs } : {});
             if (response.status === 429) {
-              const error = upstreamError(429);
-              error.retryAfterMs = retryWaitMs(response, errorData);
-              throw error;
+              throw failure;
             }
-            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw upstreamError(response.status);
-            const waitMs = retryWaitMs(response, errorData, 500);
-            if (waitMs > 1500 || now() - startedAt + waitMs >= timeoutMs) throw upstreamError(response.status);
+            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw failure;
+            const waitMs = retryAfterMs(response, errorData, 500);
+            if (waitMs > 1500 || now() - startedAt + waitMs >= timeoutMs) throw failure;
             await sleep(waitMs);
             continue;
           }

@@ -696,6 +696,26 @@ test('narration may present a pending decision without choosing it for the playe
   assert.equal(result.ok, true);
 });
 
+test('the first awakening needs no artificial time tick, but cannot be repeated later', () => {
+  const state = createGameState('照月', 'ai');
+  const narration = { ...narrationWithText('我刚从昏沉中醒来，近处脚步声逐渐清晰。'),
+    progress: { advanced: ['opening:awakened'], consequences: [], openLoops: [], dangerClocks: {} },
+    effects: {}, memory: { facts: [], entities: [] }, timeCost: 'instant' };
+  assert.equal(validateAiWorldTurn(state, createSceneContract(state, '生成旅程开篇', 'opening'), narration).ok, true);
+  state.memory.turnCount = 1;
+  assert.equal(validateAiWorldTurn(state, createSceneContract(state, '我继续观察', 'later'), narration).ok, false);
+});
+
+test('a need to decide immediately is not an already-made player decision', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我听完双方的条件', 'turn-pending-immediate');
+  for (const text of ['我必须立刻决定如何应对，但此刻仍未作出选择。', '我需要马上选择一条路，脚步却还停在原处。']) {
+    assert.equal(validateAiWorldTurn(state, contract, narrationWithText(text), []).ok, true);
+  }
+  const puppeted = validateAiWorldTurn(state, contract, narrationWithText('我必须立刻决定如何应对。我决定加入魔宗。'), []);
+  assert.ok(puppeted.errors.some(error => /擅自/.test(error)));
+});
+
 test('first-person narration cannot reveal an off-screen character inner monologue', () => {
   const state = seededAiState();
   const contract = createSceneContract(state, '我留在樱林检查足迹', 'turn-no-omniscience');
