@@ -42,6 +42,28 @@ test('AI effects cannot invent items or excessive rewards', () => {
   assert.equal(state.story.location, '赵府柴房');
 });
 
+test('chapter-exit context only bypasses an act gate for its exact declared location pair', () => {
+  const state = createGameState('照月', 'ai', () => 'chapter-exit-context');
+  state.story.act = 2;
+  state.player.realm = 22;
+  state.director.chapterId = 'act2-tournament';
+  const forged = {
+    chapterExit: {
+      fromChapterId: 'act2-tournament', nextChapterId: 'act3-mystic-entry', targetLocation: '北境天关'
+    }
+  };
+
+  const rejected = applyValidatedEffects(state, { location: '北境天关' }, forged);
+  const exact = applyValidatedEffects(state, { location: '青岚秘境' }, {
+    chapterExit: {
+      fromChapterId: 'act2-tournament', nextChapterId: 'act3-mystic-entry', targetLocation: '青岚秘境'
+    }
+  });
+
+  assert.equal(rejected.story.location, state.story.location);
+  assert.equal(exact.story.location, '青岚秘境');
+});
+
 test('AI spirit effects clamp against an equipped accessory cap without changing the bare cap', () => {
   let state = createGameState('照月', 'ai', () => 'spirit-cap');
   state.inventory.items['同心结'] = 1;

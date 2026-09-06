@@ -1,6 +1,6 @@
 import { migrateGameState } from './game-state.js';
 import { applyValidatedEffects } from './game-engine.js';
-import { CHAPTERS, ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
+import { CHAPTER_ENTRY_LOCATIONS, CHAPTERS, ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
 import { derivedPlayerStats } from './equipment.js';
 import { authoredCatalogReferences, hasVisibleFactEvidence, storyVisibleTextFor } from './discovery.js';
 
@@ -32,15 +32,6 @@ const MAIN_QUEST_CHAPTERS = {
   'mystic-entry': ['act3-mystic-entry'], 'mystic-core': ['act3-core-choice'], 'truth-below': ['act3-stone-truth'],
   'north-defense': ['act4-north-arrival'], 'rift-descent': ['act4-rift-descent'], 'sect-choice': ['act4-sect-reckoning'],
   'read-stars': ['act5-star-reflection'], 'heart-demon': ['act5-heart-mirror'], 'final-tribulation': ['act5-tribulation']
-};
-const CHAPTER_ENTRY_LOCATIONS = {
-  'act1-awakening': '赵府柴房', 'act1-rain-alley': '青石镇', 'act1-elder-test': '青石镇',
-  'act1-mountain-gate': '落霞宗外门', 'act2-outer-trial': '落霞宗外门', 'act2-forest-signs': '后山樱林',
-  'act2-sect-undercurrent': '落霞宗外门', 'act2-tournament': '落霞宗外门',
-  'act3-mystic-entry': '青岚秘境', 'act3-fog-alliance': '青岚秘境', 'act3-stone-truth': '青岚秘境',
-  'act3-core-choice': '青岚秘境', 'act4-north-arrival': '北境天关', 'act4-prisoner-truth': '北境天关',
-  'act4-rift-descent': '幽冥裂隙', 'act4-sect-reckoning': '落霞宗外门', 'act5-star-reflection': '天机台',
-  'act5-old-promises': '天机台', 'act5-heart-mirror': '天机台', 'act5-tribulation': '飞升台'
 };
 const PLAYER_PUPPET_PATTERNS = [
   /你(?:立刻|毫不犹豫地|终于)?(?:答应|同意|拒绝|决定|选择|承诺|发誓|加入|背叛|爱上)/,

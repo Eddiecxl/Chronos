@@ -1,7 +1,7 @@
 import { migrateGameState } from './game-state.js';
 import { derivedPlayerStats, normalizeEquipment } from './equipment.js';
 import {
-  ACHIEVEMENTS, CHAPTERS, ENDINGS, ENEMIES, ITEMS, LOCATIONS, NPCS, QUESTS,
+  ACHIEVEMENTS, CHAPTER_ENTRY_LOCATIONS, CHAPTERS, ENDINGS, ENEMIES, ITEMS, LOCATIONS, NPCS, QUESTS,
   RANDOM_EVENTS, REALMS, STORY_SCENES, TECHNIQUES
 } from './game-data.js';
 
@@ -563,8 +563,10 @@ export function applyValidatedEffects(source, effects = {}, context = {}) {
     const transition = context?.chapterExit;
     const exactChapterExit = transition?.targetLocation === effects.location
       && transition.fromChapterId === state.director.chapterId
-      && CHAPTERS.some((chapter) => chapter.id === transition.fromChapterId
-        && chapter.exits.some((exit) => exit.nextChapterId === transition.nextChapterId));
+      && CHAPTERS.find((chapter) => chapter.id === transition.fromChapterId)?.exits.some((exit) => (
+        exit.nextChapterId === transition.nextChapterId
+        && CHAPTER_ENTRY_LOCATIONS[exit.nextChapterId] === effects.location
+      ));
     if ((state.story.act >= target.act || exactChapterExit) && state.player.realm >= target.realm) {
       state.story.location = effects.location;
       uniquePush(state.codex.locations, effects.location);

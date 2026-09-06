@@ -60,6 +60,16 @@ export const ITEMS = {
   '踏云履': { type: 'armor', slot: 'feet', rarity: 'epic', defense: 5, spirit: 7, price: 680, description: '落足如踏云，急转时几乎不留声息。' }
 };
 
+export const CHAPTER_ENTRY_LOCATIONS = {
+  'act1-awakening': '赵府柴房', 'act1-rain-alley': '青石镇', 'act1-elder-test': '青石镇',
+  'act1-mountain-gate': '落霞宗外门', 'act2-outer-trial': '落霞宗外门', 'act2-forest-signs': '后山樱林',
+  'act2-sect-undercurrent': '落霞宗外门', 'act2-tournament': '落霞宗外门',
+  'act3-mystic-entry': '青岚秘境', 'act3-fog-alliance': '青岚秘境', 'act3-stone-truth': '青岚秘境',
+  'act3-core-choice': '青岚秘境', 'act4-north-arrival': '北境天关', 'act4-prisoner-truth': '北境天关',
+  'act4-rift-descent': '幽冥裂隙', 'act4-sect-reckoning': '落霞宗外门', 'act5-star-reflection': '天机台',
+  'act5-old-promises': '天机台', 'act5-heart-mirror': '天机台', 'act5-tribulation': '飞升台'
+};
+
 export const TECHNIQUES = {
   '吐纳': { realm: 0, cost: 0, power: 0, kind: 'cultivate', description: '最基础也最可靠的引气法。' },
   '落霞掌': { realm: 1, cost: 4, power: 1.35, kind: 'attack', description: '掌势如晚霞铺天。' },

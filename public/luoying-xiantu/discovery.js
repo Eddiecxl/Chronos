@@ -2,6 +2,10 @@ const uniquePush = (list, value) => {
   if (value && !list.includes(value)) list.push(value);
 };
 
+export function canonicalVisibleString(value) {
+  return String(value ?? '').normalize('NFKC').replace(/[\s\u200B-\u200D\uFEFF]/gu, '');
+}
+
 export function storyVisibleTextFor(narration) {
   return (narration?.blocks || [])
     .filter((block) => ['narr', 'dlg'].includes(block?.type))
@@ -34,10 +38,12 @@ export function authoredCatalogReferences(raw, items, quests) {
     else if (value && typeof value === 'object') Object.values(value).forEach(visit);
   };
   visit(raw);
-  const text = values.join(' ');
+  const text = canonicalVisibleString(values.join(' '));
   return {
-    itemNames: Object.keys(items).filter((name) => text.includes(name)),
-    questIds: Object.entries(quests).filter(([, quest]) => text.includes(quest.title)).map(([id]) => id)
+    itemNames: Object.keys(items).filter((name) => text.includes(canonicalVisibleString(name))
+      || text.includes(canonicalVisibleString(`item:${name}`))),
+    questIds: Object.entries(quests).filter(([id, quest]) => text.includes(canonicalVisibleString(quest.title))
+      || text.includes(canonicalVisibleString(`quest:${id}`))).map(([id]) => id)
   };
 }
 

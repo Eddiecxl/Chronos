@@ -600,6 +600,33 @@ test('world facts apply the same visibility gate to authored Chinese item and qu
   assert.equal(validateAiWorldTurn(gainedItem, createSceneContract(gainedItem, '我取出问天剑', 'turn-gained-sword'), gainedItemNarration).ok, true);
 });
 
+test('world fact catalog-name visibility canonicalizes Unicode and whitespace without matching different words', () => {
+  const unknown = seededAiState();
+  const contract = createSceneContract(unknown, '我继续检查足迹', 'turn-obscured-authored-name');
+  for (const label of ['问 天 剑', '问\u00a0天\u3000剑', '九 重 天 劫']) {
+    const object = `${label}已经被我看见`;
+    const narration = narrationWithText(`我确认${object}。`);
+    narration.memory.facts = [{ subjectId: 'world:obscured-catalog', predicate: 'claims', object, confidence: 1 }];
+    assert.equal(validateAiWorldTurn(unknown, contract, narration).ok, false, label);
+  }
+
+  const knownItem = seededAiState();
+  knownItem.inventory.items['问天剑'] = 1;
+  const knownItemNarration = narrationWithText('我确认问\u200b天\u200d剑仍在掌中。');
+  knownItemNarration.memory.facts = [{ subjectId: 'world:known-obscured-item', predicate: 'carries', object: '问\u200b天\u200d剑仍在掌中', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(knownItem, createSceneContract(knownItem, '我检查剑痕', 'turn-known-obscured-item'), knownItemNarration).ok, true);
+
+  const knownQuest = seededAiState();
+  knownQuest.quests.active = [{ id: 'final-tribulation', progress: 0, target: 9 }];
+  const knownQuestNarration = narrationWithText('我确认九\u200b重天\ufeff劫已经记入任务。');
+  knownQuestNarration.memory.facts = [{ subjectId: 'world:known-obscured-quest', predicate: 'tracks', object: '九\u200b重天\ufeff劫已经记入任务', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(knownQuest, createSceneContract(knownQuest, '我查看任务', 'turn-known-obscured-quest'), knownQuestNarration).ok, true);
+
+  const unrelatedNarration = narrationWithText('我确认问剑刻痕只是普通石纹。');
+  unrelatedNarration.memory.facts = [{ subjectId: 'world:unrelated-name', predicate: 'marks', object: '问剑刻痕只是普通石纹', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(unknown, contract, unrelatedNarration).ok, true);
+});
+
 test('a world response with no progress is rejected', () => {
   const state = seededAiState();
   const contract = createSceneContract(state, '继续交谈', 'turn-8');
