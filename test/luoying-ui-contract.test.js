@@ -67,9 +67,10 @@ test('character sheet renders seven labeled slots without remote assets', async 
 test('AI equipment save is revision-safe and does not create a story turn', async () => {
   const { script } = await readUi();
   assert.match(script, /async function saveAiEquipment\(itemName\)/);
-  assert.match(script, /commitAiEquipment\(storage, original, itemName\)/);
+  assert.match(script, /commitAiEquipmentForActiveJourney\(storage, original, itemName, \(\) => state\)/);
   assert.match(script, /restoreAiEquipmentState\(storage, original\)/);
   assert.match(script, /if \(pending \|\| equipmentPending \|\| state\?\.battle\)/);
+  assert.match(script, /if \(state\?\.journeyId !== original\.journeyId\) return;/);
   assert.doesNotMatch(script, /saveAiEquipment[\s\S]{0,900}append(?:StoryBlock|TurnToStory|Turn)/);
 });
 
@@ -78,4 +79,19 @@ test('all owned alternatives for a slot remain selectable while AI equipment is 
   assert.match(script, /function itemsForSlot/);
   assert.match(script, /for \(const replacement of replacements\)/);
   assert.match(script, /pending \|\| equipmentPending \|\| Boolean\(state\?\.battle\)/);
+});
+
+test('AI inventory exposes discovered equipment controls without restoring local behavior', async () => {
+  const { script } = await readUi();
+  assert.match(script, /function aiEquipmentAction/);
+  assert.match(script, /mode === 'ai' && ITEMS\[name\]\?\.slot/);
+  assert.match(script, /button\.disabled = equipmentUnavailable\(\)/);
+});
+
+test('character presentation has a no-relationship empty state, 680px layout, and local slot connectors', async () => {
+  const { script, css } = await readUi();
+  assert.match(script, /旅途尚未留下可辨认的人物记录/);
+  assert.match(script, /doll-line/);
+  assert.match(css, /@media \(max-width: 680px\)/);
+  assert.match(css, /\.doll-line/);
 });

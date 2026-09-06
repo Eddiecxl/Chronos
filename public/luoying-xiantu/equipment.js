@@ -55,6 +55,12 @@ export async function commitAiEquipment(storage, source, itemName) {
   return storage.saveAutoIfJourney('ai', candidate, source.journeyId, source.revision);
 }
 
+export async function commitAiEquipmentForActiveJourney(storage, source, itemName, getActiveState) {
+  const saved = await commitAiEquipment(storage, source, itemName);
+  return getActiveState?.()?.journeyId === source?.journeyId ? saved : null;
+}
+
 export function restoreAiEquipmentState(storage, original) {
-  return storage.loadAuto('ai') || original;
+  const authoritative = storage.loadAuto('ai');
+  return authoritative?.journeyId === original?.journeyId ? authoritative : original;
 }

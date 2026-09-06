@@ -8,7 +8,9 @@ import { createTranscriptStore } from './transcript-store.js';
 import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
 import { createAiTurnRunner } from './ai-turn.js';
 import { classifyTurn } from './turn-router.js';
-import { EQUIPMENT_SLOT_ORDER, commitAiEquipment, restoreAiEquipmentState } from './equipment.js';
+import {
+  EQUIPMENT_SLOT_ORDER, commitAiEquipmentForActiveJourney, restoreAiEquipmentState
+} from './equipment.js';
 import {
   buildCharacterView, buildCodexView, buildHistoryView, buildInventoryView, buildMapView, buildQuestView
 } from './panel-view.js';
@@ -449,6 +451,12 @@ function paperDoll(view) {
   silhouette.setAttribute('class', 'doll-silhouette');
   silhouette.setAttribute('viewBox', '0 0 220 430');
   silhouette.setAttribute('aria-hidden', 'true');
+  for (const d of ['M110 70 L110 6', 'M86 122 L18 122', 'M134 170 L202 170', 'M76 264 L18 264', 'M144 316 L202 316', 'M88 374 L18 404', 'M132 374 L202 404']) {
+    const connector = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    connector.setAttribute('class', 'doll-line');
+    connector.setAttribute('d', d);
+    silhouette.append(connector);
+  }
   const shapes = [
     ['circle', { cx: '110', cy: '58', r: '35' }], ['path', { d: 'M78 104 Q110 86 142 104 L164 215 L137 238 L138 371 L82 371 L83 238 L56 215Z' }],
     ['path', { d: 'M83 130 L37 230 L61 242 L100 171Z' }], ['path', { d: 'M137 130 L183 230 L159 242 L120 171Z' }],
@@ -473,11 +481,15 @@ async function saveAiEquipment(itemName) {
   const original = state;
   setEquipmentPending(true);
   try {
-    state = await commitAiEquipment(storage, original, itemName);
+    const saved = await commitAiEquipmentForActiveJourney(storage, original, itemName, () => state);
+    if (!saved) return;
+    if (state?.journeyId !== original.journeyId) return;
+    state = saved;
     renderTopbar();
     await renderPanel(activePanel);
     showToast(`${itemName}已装备。此操作未推进世界时间。`);
   } catch (error) {
+    if (state?.journeyId !== original.journeyId) return;
     state = restoreAiEquipmentState(storage, original);
     showToast(error?.message || '装备没有保存。');
     await renderPanel(activePanel);
@@ -517,7 +529,7 @@ function renderCharacterPanel() {
     }
     relations.append(list);
     dom.panelContent.append(relations);
-  }
+  } else dom.panelContent.append(panelCard('人物关系', ['旅途尚未留下可辨认的人物记录。']));
 }
 
 function renderQuestPanel() {
@@ -555,6 +567,18 @@ function actionButton(action) {
   return button;
 }
 
+function aiEquipmentAction(item) {
+  const button = node('button', 'equip-action inventory-equip-action');
+  const equipped = buildCharacterView(state).slots[ITEMS[item.name]?.slot] === item.name;
+  button.type = 'button';
+  button.dataset.equipmentItem = item.name;
+  button.disabled = equipmentUnavailable() || equipped;
+  button.textContent = equipped ? '已装备' : `装备 · ${SLOT_LABELS[ITEMS[item.name]?.slot] || '法器'}`;
+  button.setAttribute('aria-label', equipped ? `${item.name}已装备` : `装备${item.name}${statText(ITEMS[item.name]) ? `，${statText(ITEMS[item.name])}` : ''}`);
+  button.addEventListener('click', () => saveAiEquipment(item.name));
+  return button;
+}
+
 function renderInventoryPanel() {
   const grid = node('div', 'inventory-grid');
   const actions = mode === 'local' ? getLocalPanelActions(state, 'inventory') : [];
@@ -566,6 +590,7 @@ function renderInventoryPanel() {
     card.append(heading, node('p', '', item.description));
     const action = actions.find((candidate) => candidate.id.endsWith(`:${name}`));
     if (action) card.append(actionButton(action));
+    if (mode === 'ai' && ITEMS[name]?.slot) card.append(aiEquipmentAction(item));
     grid.append(card);
   }
   if (!grid.childElementCount) grid.append(panelCard('背包为空', ['有些因果无法装进储物袋。']));

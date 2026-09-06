@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
-import { commitAiEquipment, equipOwnedItem, restoreAiEquipmentState } from '../public/luoying-xiantu/equipment.js';
+import { commitAiEquipment, commitAiEquipmentForActiveJourney, equipOwnedItem, restoreAiEquipmentState } from '../public/luoying-xiantu/equipment.js';
 import { createStorage } from '../public/luoying-xiantu/storage.js';
 
 function memoryStorage() {
@@ -74,6 +74,37 @@ test('a stale equipment tab restores the authoritative autosave after a revision
   assert.equal(recovered.revision, committed.revision);
   assert.equal(recovered.equipment.slots.feet, '踏云履');
   assert.equal(adapter.loadAuto('ai').equipment.slots.feet, '踏云履');
+});
+
+test('equipment recovery never replaces one journey with a different autosave journey', () => {
+  const adapter = createStorage(memoryStorage());
+  const original = createGameState('甲', 'ai', () => 'journey-a');
+  const otherJourney = createGameState('乙', 'ai', () => 'journey-b');
+  otherJourney.inventory.items['踏云履'] = 1;
+  adapter.saveAuto('ai', otherJourney);
+
+  const recovered = restoreAiEquipmentState(adapter, original);
+
+  assert.equal(recovered.journeyId, 'journey-a');
+  assert.equal(recovered.player.name, '甲');
+});
+
+test('an equipment save completing after the active journey changes cannot overwrite it', async () => {
+  const source = createGameState('甲', 'ai', () => 'journey-a');
+  source.inventory.items['踏云履'] = 1;
+  const otherJourney = createGameState('乙', 'ai', () => 'journey-b');
+  let active = source;
+  let releaseSave;
+  const storage = {
+    saveAutoIfJourney: () => new Promise((resolve) => { releaseSave = () => resolve(equipOwnedItem(source, '踏云履')); })
+  };
+
+  const pendingSave = commitAiEquipmentForActiveJourney(storage, source, '踏云履', () => active);
+  active = otherJourney;
+  releaseSave();
+
+  assert.equal(await pendingSave, null);
+  assert.equal(active.journeyId, 'journey-b');
 });
 
 test('AI equipment transaction allows switching between two owned items in one slot', async () => {
