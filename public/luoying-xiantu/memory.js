@@ -1,6 +1,6 @@
 import { migrateGameState } from './game-state.js';
 import { ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
-import { hasVisibleFactEvidence } from './discovery.js';
+import { authoredCatalogReferences, hasVisibleFactEvidence } from './discovery.js';
 
 const cleanText = (value, max) => String(value ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, max);
 const cleanId = (value, max = 80) => cleanText(value, max).replace(/[^\p{L}\p{N}_.:/\-]/gu, '');
@@ -71,7 +71,7 @@ function allowedFactReferences(state, raw, options) {
     ? options.positiveItems.map((name) => cleanText(name, 40)).filter(Boolean) : []);
   const acceptedQuestIds = new Set(Array.isArray(options.acceptedQuestIds)
     ? options.acceptedQuestIds.map((id) => cleanId(id)).filter(Boolean) : []);
-  return stableReferenceIds(raw).every((id) => {
+  const stableReferencesAllowed = stableReferenceIds(raw).every((id) => {
     if (id.startsWith('npc:') || id.startsWith('generated:npc:')) return knownNpc(state, id, visibleSubjectIds);
     if (id.startsWith('location:')) return knownLocation(state, id, visibleText, movedLocationIds);
     if (id.startsWith('item:')) {
@@ -87,6 +87,13 @@ function allowedFactReferences(state, raw, options) {
     }
     return false;
   });
+  if (!stableReferencesAllowed) return false;
+  const namedReferences = authoredCatalogReferences(raw, ITEMS, QUESTS);
+  const namedItemsAllowed = namedReferences.itemNames.every((name) => Number(state.inventory.items?.[name] || 0) > 0
+    || state.codex.items.includes(name) || positiveItems.has(name));
+  const namedQuestsAllowed = namedReferences.questIds.every((id) => state.quests.active.some((quest) => quest.id === id)
+    || state.quests.completed.includes(id) || state.quests.failed.includes(id) || acceptedQuestIds.has(id));
+  return namedItemsAllowed && namedQuestsAllowed;
 }
 
 function allowedMemorySubject(state, raw, options = {}) {

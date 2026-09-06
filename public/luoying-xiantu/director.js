@@ -2,7 +2,7 @@ import { migrateGameState } from './game-state.js';
 import { applyValidatedEffects } from './game-engine.js';
 import { CHAPTERS, ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
 import { derivedPlayerStats } from './equipment.js';
-import { hasVisibleFactEvidence, storyVisibleTextFor } from './discovery.js';
+import { authoredCatalogReferences, hasVisibleFactEvidence, storyVisibleTextFor } from './discovery.js';
 
 const TIME_COSTS = { instant: 0, brief: 10, scene: 60, long: 240 };
 const EFFECT_CAPS = {
@@ -541,6 +541,19 @@ function validateMemoryFactVisibility(state, contract, narration, normalizedEffe
           errors.push(`世界记忆事实引用了未发现或无效的稳定对象：${referenceId}。`);
         }
       }
+      const namedReferences = authoredCatalogReferences(raw, ITEMS, QUESTS);
+      for (const itemName of namedReferences.itemNames) {
+        if (!(Number(state.inventory.items?.[itemName] || 0) > 0
+          || state.codex.items.includes(itemName) || positiveItems.has(itemName))) {
+          errors.push(`世界记忆事实引用了未发现物品：${itemName}。`);
+        }
+      }
+      for (const questId of namedReferences.questIds) {
+        if (!(state.quests.active.some((quest) => quest.id === questId) || state.quests.completed.includes(questId)
+          || state.quests.failed.includes(questId) || normalizedEffects?.addQuests?.includes(questId))) {
+          errors.push(`世界记忆事实引用了未发现任务：${QUESTS[questId].title}。`);
+        }
+      }
       continue;
     }
     if (subjectId.startsWith('npc:') || subjectId.startsWith('generated:npc:')) {
@@ -842,7 +855,14 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     ...recentTurns.filter((turn) => !turn.kind || turn.kind === 'world').map((turn) => turn.fingerprint || fingerprintFor(turn))
   ].filter(Boolean).slice(-2);
   if (recentFingerprints.some((previous) => similarity(previous, fingerprint) > 0.82)) errors.push('叙事与最近世界回合高度重复，形成循环。');
-  return { ok: errors.length === 0, errors: [...new Set(errors)], fingerprint, normalizedEffects };
+  const chapterExit = advancesChapter
+    ? contract.chapter.exits.find((exit) => advanced.includes(exit.progressId))
+    : null;
+  const chapterExitTransition = chapterExit && chapterExit.targetLocation === normalizedEffects.location
+    ? { fromChapterId: contract.chapter.id, nextChapterId: chapterExit.nextChapterId, targetLocation: chapterExit.targetLocation }
+    : null;
+  if (chapterExit && !chapterExitTransition) errors.push('章节出口必须结算到声明的下一章节入口地点。');
+  return { ok: errors.length === 0, errors: [...new Set(errors)], fingerprint, normalizedEffects, chapterExit: chapterExitTransition };
 }
 
 function periodForMinute(minute) {
@@ -856,7 +876,7 @@ function periodForMinute(minute) {
 export function commitValidatedWorldTurn(source, contract, narration) {
   const validation = validateAiWorldTurn(source, contract, narration, []);
   if (!validation.ok) throw new Error(`AI 世界回合未通过验证：${validation.errors.join('；')}`);
-  let state = applyValidatedEffects(source, validation.normalizedEffects);
+  let state = applyValidatedEffects(source, validation.normalizedEffects, { chapterExit: validation.chapterExit });
   const visibleActorNames = new Set((narration.blocks || [])
     .filter((block) => block?.type === 'dlg')
     .map((block) => cleanText(block.name, 40)).filter(Boolean));

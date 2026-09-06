@@ -270,6 +270,24 @@ test('world facts reject undiscovered stable entity IDs without leaking them int
   assert.ok(accepted.state.memory.facts.some((fact) => fact.subjectId === 'world:known-token'));
 });
 
+test('world facts reject undiscovered authored Chinese item and quest names without leaking into history or recap', async () => {
+  for (const label of ['问天剑', '九重天劫']) {
+    const transcriptStore = createTranscriptStore({ memory: new Map() });
+    const leaked = JSON.parse(validWorldResponse(`我在柴房门缝外听见有人提到${label}。`));
+    leaked.memory.facts = [{
+      subjectId: 'world:future-catalog-name', predicate: 'foretells', object: `${label}已经在未来等待我`, confidence: 1
+    }];
+    const state = seededAiState();
+    const rejected = await runnerWithNarrator(async () => JSON.stringify(leaked), transcriptStore)
+      .runWorld({ state, input: '我检查柴房门缝', settings: { provider: 'groq' } });
+
+    assert.equal(rejected.ok, false, label);
+    assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
+    const history = `${buildHistoryView(rejected.state || state).facts.join('\n')}\n${answerSystemQuery(rejected.state || state, '回顾之前发生的事').blocks.map((block) => block.text).join('\n')}`;
+    assert.doesNotMatch(history, new RegExp(label));
+  }
+});
+
 test('AI chapter summaries are derived only from committed visible blocks', async () => {
   const response = JSON.parse(validWorldResponse());
   response.memory.chapterSummary = '我已抵达飞升台，并与林小满完成了最后的约定。';

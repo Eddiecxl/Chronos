@@ -26,6 +26,21 @@ export function hasVisibleFactEvidence(fact, visibleText) {
   return matches.size >= 2;
 }
 
+export function authoredCatalogReferences(raw, items, quests) {
+  const values = [];
+  const visit = (value) => {
+    if (typeof value === 'string' || typeof value === 'number') values.push(String(value));
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === 'object') Object.values(value).forEach(visit);
+  };
+  visit(raw);
+  const text = values.join(' ');
+  return {
+    itemNames: Object.keys(items).filter((name) => text.includes(name)),
+    questIds: Object.entries(quests).filter(([, quest]) => text.includes(quest.title)).map(([id]) => id)
+  };
+}
+
 export function chapterSummaryFromVisibleBlocks(narration) {
   const narrated = (narration?.blocks || [])
     .filter((block) => block?.type === 'narr')

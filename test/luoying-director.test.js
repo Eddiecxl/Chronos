@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { CHAPTERS, LOCATIONS, NPCS } from '../public/luoying-xiantu/game-data.js';
+import { applyValidatedEffects } from '../public/luoying-xiantu/game-engine.js';
 import { equipOwnedItem } from '../public/luoying-xiantu/equipment.js';
 import {
   buildRepairMessages, commitValidatedWorldTurn, createSceneContract, validateAiWorldTurn
@@ -523,6 +524,80 @@ test('chapter exits require an affirmative choice bound to a concrete legal effe
 
   const chosenContract = createSceneContract(state, '我决定前往落霞宗外门交付证据', 'turn-exit-chosen-target');
   assert.equal(validateAiWorldTurn(state, chosenContract, targetedExit).ok, true);
+});
+
+test('validated chapter exits commit their exact declared entry locations across every authored transition', () => {
+  for (const chapter of CHAPTERS.filter((candidate) => candidate.exits.length)) {
+    const state = createGameState('照月', 'ai', () => `exit-${chapter.id}`);
+    state.director.chapterId = chapter.id;
+    state.director.sceneGoal = chapter.goal;
+    state.story.act = chapter.act;
+    state.player.realm = 22;
+    state.director.chapterTurns = 1;
+    state.memory.facts = chapter.requiredFacts.map((id) => ({
+      id, subjectId: 'world:prerequisite', predicate: 'known', object: id,
+      sourceTurnId: 'world-bible', createdAtTurn: 0, locked: true
+    }));
+    const setupContract = createSceneContract(state, '我准备作出决定', `turn-${chapter.id}-setup`);
+    state.story.location = setupContract.chapter.prerequisites.requiredLocation || state.story.location;
+    state.director.openLoops = [setupContract.pace.opportunityId];
+    const exit = setupContract.chapter.exits[0];
+    const target = exit.targetLocation;
+    const nextChapter = CHAPTERS.find((candidate) => candidate.id === exit.nextChapterId);
+    const contract = createSceneContract(state, `我决定前往${target}`, `turn-${chapter.id}-exit`);
+    const narration = narrationWithText(`我循着已经显露的机会动身，穿过最后一道阻碍，明确前往${target}。`);
+    narration.effects = { location: target };
+    narration.progress.advanced = [exit.progressId];
+    narration.progress.dangerClocks = { [chapter.dangerClock.id]: 1 };
+
+    const validation = validateAiWorldTurn(state, contract, narration);
+    assert.equal(validation.ok, true, `${chapter.id}: ${validation.errors.join('；')}`);
+    const committed = commitValidatedWorldTurn(state, contract, narration);
+    assert.equal(committed.story.act, nextChapter.act, chapter.id);
+    assert.equal(committed.director.chapterId, nextChapter.id, chapter.id);
+    assert.equal(committed.story.location, target, chapter.id);
+  }
+});
+
+test('ordinary travel still cannot bypass an act-locked chapter entry location', () => {
+  const state = createGameState('照月', 'ai', () => 'locked-travel');
+  state.story.act = 2;
+  state.player.realm = 22;
+
+  const traveled = applyValidatedEffects(state, { location: '青岚秘境' });
+
+  assert.equal(traveled.story.location, state.story.location);
+});
+
+test('world facts apply the same visibility gate to authored Chinese item and quest names', () => {
+  const unseenState = seededAiState();
+  const unseenContract = createSceneContract(unseenState, '我继续检查足迹', 'turn-hidden-authored-name');
+  for (const [label, object] of [
+    ['问天剑', '问天剑已经在远处等我'],
+    ['九重天劫', '九重天劫即将降临']
+  ]) {
+    const narration = narrationWithText(`我听见关于${label}的传闻，却没有取得任何能够证实它的东西。`);
+    narration.memory.facts = [{ subjectId: 'world:future-name', predicate: 'foretells', object, confidence: 1 }];
+    assert.equal(validateAiWorldTurn(unseenState, unseenContract, narration).ok, false, label);
+  }
+
+  const knownItem = seededAiState();
+  knownItem.inventory.items['问天剑'] = 1;
+  const knownItemNarration = narrationWithText('我擦去问天剑上的泥痕，确认它仍在掌中。');
+  knownItemNarration.memory.facts = [{ subjectId: 'world:known-sword', predicate: 'carries', object: '问天剑仍在我掌中', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(knownItem, createSceneContract(knownItem, '我检查问天剑', 'turn-known-sword'), knownItemNarration).ok, true);
+
+  const acceptedQuest = seededAiState();
+  const acceptedQuestNarration = narrationWithText('我接受了桃花一壶的委托，先将酒壶的来历记下。');
+  acceptedQuestNarration.effects = { addQuests: ['elder-wine'] };
+  acceptedQuestNarration.memory.facts = [{ subjectId: 'world:accepted-quest', predicate: 'accepted', object: '桃花一壶已经由我接下', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(acceptedQuest, createSceneContract(acceptedQuest, '我接受桃花一壶', 'turn-accepted-quest'), acceptedQuestNarration).ok, true);
+
+  const gainedItem = seededAiState();
+  const gainedItemNarration = narrationWithText('我从石缝中取出问天剑，剑鸣证明它已归我所有。');
+  gainedItemNarration.effects = { addItems: { '问天剑': 1 } };
+  gainedItemNarration.memory.facts = [{ subjectId: 'world:gained-sword', predicate: 'gained', object: '问天剑已被我取得', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(gainedItem, createSceneContract(gainedItem, '我取出问天剑', 'turn-gained-sword'), gainedItemNarration).ok, true);
 });
 
 test('a world response with no progress is rejected', () => {

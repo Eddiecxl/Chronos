@@ -1,7 +1,7 @@
 import { migrateGameState } from './game-state.js';
 import { derivedPlayerStats, normalizeEquipment } from './equipment.js';
 import {
-  ACHIEVEMENTS, ENDINGS, ENEMIES, ITEMS, LOCATIONS, NPCS, QUESTS,
+  ACHIEVEMENTS, CHAPTERS, ENDINGS, ENEMIES, ITEMS, LOCATIONS, NPCS, QUESTS,
   RANDOM_EVENTS, REALMS, STORY_SCENES, TECHNIQUES
 } from './game-data.js';
 
@@ -537,7 +537,7 @@ function weirdReply(raw) {
   return '我听见了。可你真正想做的，恐怕还在后半句话里。';
 }
 
-export function applyValidatedEffects(source, effects = {}) {
+export function applyValidatedEffects(source, effects = {}, context = {}) {
   const state = copy(source);
   if (!effects || typeof effects !== 'object') return state;
   const hpBeforeEffects = state.player.hp;
@@ -560,7 +560,12 @@ export function applyValidatedEffects(source, effects = {}) {
   applyAiQuestLifecycle(state, effects);
   if (typeof effects.location === 'string' && LOCATIONS[effects.location]) {
     const target = LOCATIONS[effects.location];
-    if (state.story.act >= target.act && state.player.realm >= target.realm) {
+    const transition = context?.chapterExit;
+    const exactChapterExit = transition?.targetLocation === effects.location
+      && transition.fromChapterId === state.director.chapterId
+      && CHAPTERS.some((chapter) => chapter.id === transition.fromChapterId
+        && chapter.exits.some((exit) => exit.nextChapterId === transition.nextChapterId));
+    if ((state.story.act >= target.act || exactChapterExit) && state.player.realm >= target.realm) {
       state.story.location = effects.location;
       uniquePush(state.codex.locations, effects.location);
     }
