@@ -18,11 +18,35 @@ function seedMemoryState() {
 
 test('validated facts persist by stable entity id and source turn', () => {
   const state = createGameState('照月', 'ai');
+  state.memory.entities['npc:lin-xiaoman'] = {
+    id: 'npc:lin-xiaoman', kind: 'npc', name: '林小满', status: 'alive', location: '落霞宗外门',
+    purpose: '与主角共同成长', knownFactIds: [], facts: []
+  };
   const next = applyMemoryCandidates(state, [{
     subjectId: 'npc:lin-xiaoman', predicate: 'promised', object: '共赴青岚秘境', confidence: 1
   }], 'turn-7');
   assert.equal(next.memory.facts[0].sourceTurnId, 'turn-7');
   assert.equal(next.memory.entities['npc:lin-xiaoman'].facts[0], next.memory.facts[0].id);
+});
+
+test('unseen core NPC facts cannot create an entity or enter memory without discovery evidence', () => {
+  const state = createGameState('照月', 'ai');
+  const next = applyMemoryCandidates(state, [{
+    subjectId: 'npc:lin-xiaoman', predicate: 'secret', object: '林小满正在未来章节等待', confidence: 1
+  }], 'turn-hidden-npc');
+
+  assert.equal(next.memory.entities['npc:lin-xiaoman'], undefined);
+  assert.equal(next.memory.facts.some((fact) => fact.object.includes('未来章节')), false);
+});
+
+test('unseen core location facts cannot enter memory before the location is discovered', () => {
+  const state = createGameState('照月', 'ai');
+  const next = applyMemoryCandidates(state, [{
+    subjectId: 'location:nether-rift', predicate: 'contains', object: '幽冥裂隙深处藏着未醒的魔门', confidence: 1
+  }], 'turn-hidden-location');
+
+  assert.equal(next.memory.entities['location:nether-rift'], undefined);
+  assert.equal(next.memory.facts.some((fact) => fact.object.includes('幽冥裂隙')), false);
 });
 
 test('duplicate facts do not multiply and locked facts cannot be replaced', () => {
@@ -43,9 +67,19 @@ test('generated entities receive stable ids and remain in the world registry', (
   const next = registerEntityCandidates(state, [{
     id: 'generated:npc:herbalist-qiu', kind: 'npc', name: '秋药师', location: '青石镇',
     purpose: '寻找失踪的徒弟', traits: ['谨慎', '记仇']
-  }], 'turn-9');
+  }], 'turn-9', { visibleEntityIds: ['generated:npc:herbalist-qiu'] });
   assert.equal(next.memory.entities['generated:npc:herbalist-qiu'].purpose, '寻找失踪的徒弟');
   assert.equal(next.memory.entities['generated:npc:herbalist-qiu'].createdTurnId, 'turn-9');
+});
+
+test('generated entities cannot be created from an invisible memory candidate alone', () => {
+  const state = createGameState('照月', 'ai');
+  const next = registerEntityCandidates(state, [{
+    id: 'generated:npc:future-doctor', kind: 'npc', name: '未来药师', location: '青石镇',
+    purpose: '只在隐藏事实中出现'
+  }], 'turn-generated-hidden');
+
+  assert.equal(next.memory.entities['generated:npc:future-doctor'], undefined);
 });
 
 test('generated entities with unknown parents or unsafe ids are rejected', () => {

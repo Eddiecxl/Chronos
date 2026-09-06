@@ -18,9 +18,11 @@ function uniquePush(list, value) {
 
 function addItem(state, name, amount = 1) {
   if (!ITEMS[name]) return false;
-  state.inventory.items[name] = Math.max(0, (state.inventory.items[name] || 0) + Math.floor(amount));
+  const before = Math.max(0, Number(state.inventory.items[name] || 0));
+  const delta = Math.floor(Number(amount) || 0);
+  state.inventory.items[name] = Math.max(0, before + delta);
   if (state.inventory.items[name] === 0) delete state.inventory.items[name];
-  uniquePush(state.codex.items, name);
+  if (state.inventory.items[name] > before) uniquePush(state.codex.items, name);
   return true;
 }
 
@@ -60,6 +62,31 @@ function addQuest(state, id, blocks) {
   if (!quest || state.quests.completed.includes(id) || state.quests.active.some((entry) => entry.id === id)) return;
   state.quests.active.push({ id, progress: 0, target: quest.target, startedAt: new Date().toISOString() });
   blocks?.push(sys(`新任务 · ${quest.title}：${quest.description}`));
+}
+
+function applyAiQuestLifecycle(state, effects) {
+  const progress = effects?.questProgress && typeof effects.questProgress === 'object'
+    ? effects.questProgress : {};
+  for (const [id, amount] of Object.entries(progress)) {
+    const entry = state.quests.active.find((quest) => quest.id === id);
+    if (entry) entry.progress = Math.min(entry.target, entry.progress + Math.floor(Number(amount) || 0));
+  }
+  const history = state.quests.history || (state.quests.history = {});
+  for (const id of Array.isArray(effects?.completeQuests) ? effects.completeQuests : []) {
+    const index = state.quests.active.findIndex((quest) => quest.id === id);
+    if (index < 0) continue;
+    const [entry] = state.quests.active.splice(index, 1);
+    history[id] = { status: 'completed', progress: entry.progress, target: entry.target };
+    uniquePush(state.quests.completed, id);
+    applyReward(state, QUESTS[id]?.reward);
+  }
+  for (const id of Array.isArray(effects?.failQuests) ? effects.failQuests : []) {
+    const index = state.quests.active.findIndex((quest) => quest.id === id);
+    if (index < 0) continue;
+    const [entry] = state.quests.active.splice(index, 1);
+    history[id] = { status: 'failed', progress: entry.progress, target: entry.target };
+    uniquePush(state.quests.failed, id);
+  }
 }
 
 function applyReward(state, reward = {}, blocks = []) {
@@ -530,6 +557,7 @@ export function applyValidatedEffects(source, effects = {}) {
   if (Array.isArray(effects.addQuests)) {
     for (const id of effects.addQuests.slice(0, 5)) if (QUESTS[id]) addQuest(state, id);
   }
+  applyAiQuestLifecycle(state, effects);
   if (typeof effects.location === 'string' && LOCATIONS[effects.location]) {
     const target = LOCATIONS[effects.location];
     if (state.story.act >= target.act && state.player.realm >= target.realm) {

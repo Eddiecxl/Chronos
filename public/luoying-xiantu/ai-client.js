@@ -111,6 +111,23 @@ function normalizeMemory(memory) {
   return { facts, entities, ...(chapterSummary ? { chapterSummary } : {}) };
 }
 
+function normalizeEffects(effects) {
+  const source = effects && typeof effects === 'object' && !Array.isArray(effects) ? effects : {};
+  const output = {};
+  for (const key of ['hp', 'qi', 'spirit', 'gold']) if (source[key] !== undefined) output[key] = Number(source[key]);
+  if (typeof source.location === 'string') output.location = cleanText(source.location, 80);
+  for (const key of ['addItems', 'relationships', 'questProgress']) {
+    if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+      output[key] = Object.fromEntries(Object.entries(source[key]).slice(0, 30)
+        .map(([id, value]) => [cleanText(id, 80), Number(value)]));
+    }
+  }
+  for (const key of ['addQuests', 'completeQuests', 'failQuests']) {
+    if (Array.isArray(source[key])) output[key] = source[key].map((id) => cleanText(id, 80)).filter(Boolean).slice(0, 30);
+  }
+  return output;
+}
+
 export function parseNarration(text, requestType = 'world') {
   const json = findJsonObject(text).replace(/,(\s*[}\]])/g, '$1');
   let data;
@@ -127,7 +144,7 @@ export function parseNarration(text, requestType = 'world') {
   }
   return {
     blocks,
-    effects: data.effects && typeof data.effects === 'object' && !Array.isArray(data.effects) ? data.effects : {},
+    effects: normalizeEffects(data.effects),
     progress: normalizeProgress(data.progress),
     memory: normalizeMemory(data.memory),
     timeCost: ['instant', 'brief', 'scene', 'long'].includes(data.timeCost) ? data.timeCost : 'brief',

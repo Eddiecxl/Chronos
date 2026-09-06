@@ -81,6 +81,23 @@ function safeQuestList(value) {
   }).filter(Boolean);
 }
 
+function safeQuestHistory(value) {
+  if (!isRecord(value)) return {};
+  const output = {};
+  for (const [rawId, rawEntry] of Object.entries(value).slice(0, 100)) {
+    if (!isRecord(rawEntry)) continue;
+    const id = cleanId(rawId, 60);
+    const status = ['completed', 'failed'].includes(rawEntry.status) ? rawEntry.status : '';
+    if (!id || !status) continue;
+    output[id] = {
+      status,
+      progress: Math.floor(clamp(rawEntry.progress, 0, 9999)),
+      target: Math.floor(clamp(rawEntry.target || 1, 1, 9999))
+    };
+  }
+  return output;
+}
+
 function safeFacts(value) {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 500).map((entry, index) => {
@@ -214,7 +231,7 @@ export function createGameState(name = '顾长生', mode = 'local', idFactory = 
       consecutiveIdleTurns: 0, recentFingerprints: [],
       chapterTurns: 0, turnsSinceChapterProgress: 0, pacePressure: 0
     },
-    quests: { active: [], completed: [], failed: [] },
+    quests: { active: [], completed: [], failed: [], history: {} },
     inventory: { items: { '回春丹': 1 }, materials: {}, limit: 36 },
     equipment: normalizeEquipment({}),
     techniques: { known: ['吐纳'], equipped: ['吐纳'], mastery: { '吐纳': 0 } },
@@ -295,7 +312,8 @@ function normalizeV3(input, expectedMode) {
   base.quests = {
     active: safeQuestList(quests.active),
     completed: stringList(quests.completed, 100, 60),
-    failed: stringList(quests.failed, 100, 60)
+    failed: stringList(quests.failed, 100, 60),
+    history: safeQuestHistory(quests.history)
   };
   base.inventory = {
     items: safeMap(inventory.items),

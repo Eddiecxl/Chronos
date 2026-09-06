@@ -32,6 +32,15 @@ const MAIN_QUEST_CHAPTERS = {
   'north-defense': ['act4-north-arrival'], 'rift-descent': ['act4-rift-descent'], 'sect-choice': ['act4-sect-reckoning'],
   'read-stars': ['act5-star-reflection'], 'heart-demon': ['act5-heart-mirror'], 'final-tribulation': ['act5-tribulation']
 };
+const CHAPTER_ENTRY_LOCATIONS = {
+  'act1-awakening': '赵府柴房', 'act1-rain-alley': '青石镇', 'act1-elder-test': '青石镇',
+  'act1-mountain-gate': '落霞宗外门', 'act2-outer-trial': '落霞宗外门', 'act2-forest-signs': '后山樱林',
+  'act2-sect-undercurrent': '落霞宗外门', 'act2-tournament': '落霞宗外门',
+  'act3-mystic-entry': '青岚秘境', 'act3-fog-alliance': '青岚秘境', 'act3-stone-truth': '青岚秘境',
+  'act3-core-choice': '青岚秘境', 'act4-north-arrival': '北境天关', 'act4-prisoner-truth': '北境天关',
+  'act4-rift-descent': '幽冥裂隙', 'act4-sect-reckoning': '落霞宗外门', 'act5-star-reflection': '天机台',
+  'act5-old-promises': '天机台', 'act5-heart-mirror': '天机台', 'act5-tribulation': '飞升台'
+};
 const PLAYER_PUPPET_PATTERNS = [
   /你(?:立刻|毫不犹豫地|终于)?(?:答应|同意|拒绝|决定|选择|承诺|发誓|加入|背叛|爱上)/,
   /你(?:感到|觉得)(?:无比|非常|由衷)?(?:喜悦|幸福|悔恨|忠诚|爱慕|憎恨)/,
@@ -142,12 +151,15 @@ export function classifyChapterProgress(narration, contract) {
 
   const questAdvanced = Array.isArray(narration?.effects?.addQuests)
     && narration.effects.addQuests.some((id) => contract.legalQuestIds.includes(id) && !contract.knownQuestIds.includes(id));
+  const questLifecycle = Object.keys(narration?.effects?.questProgress || {}).length
+    || (narration?.effects?.completeQuests || []).length
+    || (narration?.effects?.failQuests || []).length;
   const requiredDiscovery = advanced.some((id) => contract.pace.requiredProgressIds.includes(id));
   const clockChanged = [...effectiveClockDeltas(contract, narration).values()].some((delta) => delta !== 0);
   const resolvedCurrentLoop = Array.isArray(narration?.progress?.resolvedLoops)
     && narration.progress.resolvedLoops.some((id) => contract.openLoopIds.includes(cleanId(id)));
   const decisiveOpportunity = advanced.includes(contract.pace.opportunityId);
-  return requiredDiscovery || questAdvanced || clockChanged || resolvedCurrentLoop || decisiveOpportunity ? 'material' : 'minor';
+  return requiredDiscovery || questAdvanced || questLifecycle || clockChanged || resolvedCurrentLoop || decisiveOpportunity ? 'material' : 'minor';
 }
 
 function intrinsicFactId(npcId) {
@@ -215,6 +227,15 @@ function legalQuestIds(state, chapter) {
   }).map(([id]) => id);
 }
 
+function chapterPrerequisites(chapter) {
+  return {
+    minCommittedTurns: Math.max(1, Number(chapter.minCommittedTurns || 1)),
+    requiredCompletedQuestIds: [...(chapter.requiredCompletedQuestIds || [])],
+    requiredFacts: [...(chapter.requiredFacts || [])],
+    requiredLocation: CHAPTER_ENTRY_LOCATIONS[chapter.id] || null
+  };
+}
+
 export function createSceneContract(source, input, turnId) {
   const state = migrateGameState(source, 'ai');
   const derived = derivedPlayerStats(state);
@@ -225,6 +246,7 @@ export function createSceneContract(source, input, turnId) {
     maxSpirit: derived.maxSpirit
   };
   const chapter = currentChapter(state);
+  const prerequisites = chapterPrerequisites(chapter);
   const actors = contractActors(state, input, chapter);
   const actorFactIds = new Set(actors.flatMap((actor) => actor.knownFactIds));
   const rememberedFacts = state.memory.facts
@@ -256,7 +278,8 @@ export function createSceneContract(source, input, turnId) {
         progressId: AUTHORED_FACTS[factId]?.progressId || null,
         description: AUTHORED_FACTS[factId]?.object || null
       })),
-      dangerClock: structuredClone(chapter.dangerClock), exits: structuredClone(chapter.exits)
+      dangerClock: structuredClone(chapter.dangerClock), exits: structuredClone(chapter.exits),
+      prerequisites
     },
     sceneGoal: state.director.sceneGoal || chapter.goal,
     location: { id: LOCATIONS[state.story.location]?.id || 'location:unknown', name: state.story.location },
@@ -269,6 +292,7 @@ export function createSceneContract(source, input, turnId) {
     legalItemIds: Object.keys(ITEMS),
     legalLocations: unlockedLocations,
     legalQuestIds: legalQuestIds(state, chapter),
+    activeQuests: state.quests.active.map((quest) => ({ id: quest.id, progress: quest.progress, target: quest.target })),
     activeQuestIds: state.quests.active.map((quest) => quest.id),
     knownQuestIds: [...new Set([
       ...state.quests.active.map((quest) => quest.id), ...state.quests.completed, ...state.quests.failed
@@ -350,7 +374,10 @@ function hasConcreteProgress(narration, contract) {
   const resolvesLoop = Array.isArray(progress.resolvedLoops)
     && progress.resolvedLoops.some((id) => contract.openLoopIds.includes(cleanId(id)));
   const battleChangedState = advanced.some((id) => id.startsWith('battle:')) && Boolean(hasEffect);
-  return Boolean(recognizedAdvance || battleChangedState || hasEffect || hasFact || hasClockChange || opensNewLoop || resolvesLoop);
+  const questLifecycle = Object.keys(narration?.effects?.questProgress || {}).length
+    || (narration?.effects?.completeQuests || []).length
+    || (narration?.effects?.failQuests || []).length;
+  return Boolean(recognizedAdvance || battleChangedState || hasEffect || hasFact || hasClockChange || opensNewLoop || resolvesLoop || questLifecycle);
 }
 
 function fingerprintFor(narration) {
@@ -390,6 +417,57 @@ function validatedDialogueNames(contract, blocks) {
     .filter(Boolean));
 }
 
+function validatedDialogueSubjects(contract, blocks) {
+  const actors = new Map(contract.actors.map((actor) => [actor.name, actor]));
+  const subjects = new Set();
+  for (const block of blocks) {
+    if (block?.type !== 'dlg') continue;
+    const actor = actors.get(cleanText(block.name, 40));
+    const factIds = Array.isArray(block.factIds) ? block.factIds.map((id) => cleanId(id)).filter(Boolean) : [];
+    if (actor && factIds.length && factIds.every((id) => actor.knownFactIds.includes(id))) subjects.add(actor.id);
+  }
+  return subjects;
+}
+
+function validateMemoryFactVisibility(state, contract, narration, normalizedEffects, errors) {
+  const candidates = Array.isArray(narration?.memory?.entities) ? narration.memory.entities : [];
+  const candidateById = new Map(candidates.map((entity) => [cleanId(entity?.id), entity]));
+  const visibleSubjects = validatedDialogueSubjects(contract, narration.blocks || []);
+  for (const candidate of candidates) {
+    const id = cleanId(candidate?.id);
+    const name = cleanText(candidate?.name, 40);
+    if (id && name && (narration.blocks || []).some((block) => block?.type === 'dlg'
+      && cleanText(block.name, 40) === name && Array.isArray(block.factIds) && block.factIds.length)) {
+      visibleSubjects.add(id);
+    }
+  }
+  const visibleText = (narration.blocks || []).map((block) => `${block?.name || ''}${block?.text || ''}`).join('');
+  const currentLocationId = contract.location.id;
+  const currentLocationName = contract.location.name;
+  const positiveItems = new Set(Object.entries(normalizedEffects?.addItems || {})
+    .filter(([, amount]) => Number.isInteger(amount) && amount > 0)
+    .map(([name]) => name));
+  const subjects = Array.isArray(narration?.memory?.facts) ? narration.memory.facts : [];
+  for (const raw of subjects) {
+    const subjectId = cleanId(raw?.subjectId);
+    if (!subjectId) continue;
+    const known = state.memory.entities[subjectId];
+    const currentLocation = subjectId === currentLocationId || subjectId === currentLocationName;
+    const generic = subjectId.startsWith('world:') || subjectId.startsWith('loop:') || subjectId.startsWith('quest:')
+      || subjectId === 'player' || subjectId.startsWith('player:');
+    const visibleActor = visibleSubjects.has(subjectId);
+    const visibleGenerated = candidateById.has(subjectId) && visibleSubjects.has(subjectId);
+    const destinationEntry = Object.entries(LOCATIONS).find(([, location]) => location.id === subjectId);
+    const movedToLocation = destinationEntry && normalizedEffects?.location === destinationEntry[0]
+      && visibleText.includes(destinationEntry[0]);
+    const itemName = subjectId.startsWith('item:') ? subjectId.slice('item:'.length) : '';
+    const itemEvidence = itemName && (Number(state.inventory.items?.[itemName] || 0) > 0 || positiveItems.has(itemName))
+      && visibleText.includes(itemName);
+    if (generic || known || currentLocation || visibleActor || visibleGenerated || movedToLocation || itemEvidence) continue;
+    errors.push(`记忆事实 ${subjectId} 缺少当前、已发现或本回合可见验证证据。`);
+  }
+}
+
 function validateEffects(contract, effects, errors, dialogueNames = new Set()) {
   if (effects == null) return {};
   if (typeof effects !== 'object' || Array.isArray(effects)) {
@@ -414,7 +492,7 @@ function validateEffects(contract, effects, errors, dialogueNames = new Set()) {
       normalized.addItems = {};
       for (const [name, amount] of Object.entries(effects.addItems)) {
         if (!contract.legalItemIds.includes(name)) errors.push(`未知物品：${name}。`);
-        else if (!Number.isFinite(Number(amount)) || Number(amount) < 0 || Number(amount) > 5) errors.push(`${name} 的数量超出限制。`);
+        else if (!Number.isInteger(Number(amount)) || Number(amount) < 1 || Number(amount) > 5) errors.push(`${name} 的数量必须是 1–5 的正整数。`);
         else normalized.addItems[name] = Number(amount);
       }
     }
@@ -437,7 +515,48 @@ function validateEffects(contract, effects, errors, dialogueNames = new Set()) {
     if (quests.some((id) => !contract.legalQuestIds.includes(id))) errors.push('任务效果包含未知任务。');
     else normalized.addQuests = quests;
   }
+  if (effects.questProgress !== undefined) {
+    if (!effects.questProgress || typeof effects.questProgress !== 'object' || Array.isArray(effects.questProgress)) errors.push('任务进度格式无效。');
+    else normalized.questProgress = Object.fromEntries(Object.entries(effects.questProgress).map(([id, amount]) => [cleanId(id), Number(amount)]));
+  }
+  for (const key of ['completeQuests', 'failQuests']) {
+    if (effects[key] !== undefined) {
+      if (!Array.isArray(effects[key])) errors.push(`${key} 必须是任务编号数组。`);
+      else normalized[key] = [...new Set(effects[key].map((id) => cleanId(id)).filter(Boolean))];
+    }
+  }
   return normalized;
+}
+
+function validateQuestLifecycle(state, contract, normalizedEffects, errors) {
+  const active = new Map(state.quests.active.map((entry) => [entry.id, entry]));
+  const progress = normalizedEffects.questProgress || {};
+  const complete = new Set(normalizedEffects.completeQuests || []);
+  const failed = new Set(normalizedEffects.failQuests || []);
+  const add = new Set(normalizedEffects.addQuests || []);
+  for (const [id, amount] of Object.entries(progress)) {
+    const entry = active.get(id);
+    if (!entry) errors.push(`任务 ${id} 不是本回合开始时已接取的任务。`);
+    else if (!Number.isInteger(amount) || amount < 1 || amount > Math.max(0, Number(entry.target) - Number(entry.progress))) {
+      errors.push(`任务 ${id} 的进度必须是未超过目标的正整数。`);
+    }
+  }
+  for (const id of [...complete, ...failed]) {
+    if (!active.has(id)) errors.push(`任务 ${id} 不是本回合开始时已接取的任务。`);
+  }
+  for (const id of complete) {
+    if (failed.has(id)) errors.push(`任务 ${id} 不能同时完成和失败。`);
+    const entry = active.get(id);
+    const amount = Number(progress[id] || 0);
+    if (entry && (!Number.isInteger(amount) || amount < 1 || Number(entry.progress) + amount < Number(entry.target))) {
+      errors.push(`任务 ${id} 只有在本回合合法进度达到目标后才能完成。`);
+    }
+  }
+  for (const id of [...add]) {
+    if (Object.hasOwn(progress, id) || complete.has(id) || failed.has(id)) {
+      errors.push(`任务 ${id} 不能在接取的同一回合推进、完成或失败。`);
+    }
+  }
 }
 
 function playerChoseOpportunity(input) {
@@ -545,6 +664,21 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     errors.push('连续空转已达上限，本回合必须推动主线压力、线索、任务或有效支路。');
   }
   if (advancesChapter) {
+    const opportunityId = contract.pace.opportunityId;
+    const markerBeforeTurn = contract.openLoopIds.includes(opportunityId);
+    if (!markerBeforeTurn) errors.push('章节出口必须建立在上一回合已提交的决定性机会之上。');
+    if (advanced.includes(opportunityId) && !markerBeforeTurn) errors.push('决定性机会不能与章节出口在同一回合首次提交。');
+    if (!playerChoseOpportunity(contract.playerInput)) errors.push('章节出口必须由玩家本回合明确选择已存在的机会。');
+    if (contract.pace.chapterTurns < contract.chapter.prerequisites.minCommittedTurns) {
+      errors.push('章节出口尚未满足最少已提交回合数。');
+    }
+    if (contract.chapter.prerequisites.requiredLocation
+      && state.story.location !== contract.chapter.prerequisites.requiredLocation) {
+      errors.push('章节出口必须在当前章节要求的地点结算。');
+    }
+    const missingQuests = contract.chapter.prerequisites.requiredCompletedQuestIds
+      .filter((id) => !state.quests.completed.includes(id));
+    if (missingQuests.length) errors.push('章节前置任务尚未完成：' + missingQuests.join('、') + '。');
     const knownFacts = new Set(contract.facts.map((fact) => fact.id));
     const missingFacts = contract.chapter.requiredFacts.filter((id) => !knownFacts.has(id)
       && (!AUTHORED_FACTS[id]?.progressId || !advanced.includes(AUTHORED_FACTS[id].progressId)));
@@ -575,6 +709,8 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
 
   const normalizedEffects = validateEffects(contract, narration.effects || {}, errors, validatedDialogueNames(contract, blocks));
+  validateQuestLifecycle(state, contract, normalizedEffects, errors);
+  validateMemoryFactVisibility(state, contract, narration, normalizedEffects, errors);
   validateDecisiveOpportunityEffects(contract, advanced, normalizedEffects, errors);
   const actorById = new Map(contract.actors.flatMap((actor) => [[actor.id, actor], [actor.name, actor]]));
   for (const [actorId, factIds] of Object.entries(factsByActor)) {

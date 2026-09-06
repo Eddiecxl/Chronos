@@ -157,7 +157,7 @@ test('decisive pressure accepts a chapter opportunity without auto-exiting', () 
   assert.equal(next.director.chapterId, 'act2-forest-signs');
 });
 
-test('decisive pressure rejects a markerless chapter exit but accepts opportunity plus exit', () => {
+test('decisive pressure rejects markerless and same-turn opportunity chapter exits', () => {
   const state = seededAiState();
   state.director.chapterTurns = 8;
   const contract = createSceneContract(state, '我把证据交给执事', 'turn-decisive-exit');
@@ -171,7 +171,7 @@ test('decisive pressure rejects a markerless chapter exit but accepts opportunit
   assert.ok(markerless.errors.some((error) => /决定性机会/.test(error)));
 
   narration.progress.advanced.unshift(contract.pace.opportunityId);
-  assert.equal(validateAiWorldTurn(state, contract, narration).ok, true);
+  assert.equal(validateAiWorldTurn(state, contract, narration).ok, false);
 });
 
 test('exitless final chapter remains playable under decisive pressure', () => {
@@ -301,7 +301,8 @@ test('a real chapter exit resets hidden chapter pacing counters', () => {
   state.director.chapterTurns = 7;
   state.director.turnsSinceChapterProgress = 6;
   state.director.pacePressure = 2;
-  const contract = createSceneContract(state, '把证据交给执事', 'turn-pace-exit');
+  state.director.openLoops = ['opportunity:act2-forest-signs'];
+  const contract = createSceneContract(state, '我决定交付证据给执事', 'turn-pace-exit');
   const narration = {
     ...narrationWithText('我把拓印和黑砂交到戒律堂，执事验明来源后立刻封锁后山。'),
     progress: {
@@ -370,6 +371,109 @@ test('relationship effects require the same character to have visible validated 
   const committed = commitValidatedWorldTurn(state, contract, withDialogue);
   assert.equal(committed.relationships['林小满'], 4);
   assert.equal(committed.memory.entities['npc:lin-xiaoman'].name, '林小满');
+});
+
+test('AI memory facts require current, previously discovered, or visibly validated subject evidence', () => {
+  const unseenNpcState = createGameState('照月', 'ai');
+  const unseenNpcContract = createSceneContract(unseenNpcState, '我想起林小满的名字', 'turn-fact-hidden-npc');
+  const unseenNpc = narrationWithText('我只在柴房里听见雨声，没有见到那位尚未相识的人。');
+  unseenNpc.memory.facts = [{ subjectId: 'npc:lin-xiaoman', predicate: 'waits', object: '林小满正在未来章节等待', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(unseenNpcState, unseenNpcContract, unseenNpc).ok, false);
+
+  const hiddenLocationState = createGameState('照月', 'ai');
+  const hiddenLocationContract = createSceneContract(hiddenLocationState, '我检查柴房门缝', 'turn-fact-hidden-location');
+  const hiddenLocation = narrationWithText('我只看见柴房门缝里的雨水，没有抵达远方裂隙。');
+  hiddenLocation.memory.facts = [{ subjectId: 'location:nether-rift', predicate: 'contains', object: '幽冥裂隙深处藏着魔门', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(hiddenLocationState, hiddenLocationContract, hiddenLocation).ok, false);
+
+  const discoveredState = seededAiState();
+  const discoveredContract = createSceneContract(discoveredState, '我继续检查足迹', 'turn-fact-known-person');
+  const discovered = narrationWithText('我沿着已经见过的林小满留下的足迹继续核对泥痕。');
+  discovered.memory.facts = [{ subjectId: 'npc:lin-xiaoman', predicate: 'returns', object: '林小满曾在樱林西侧留下回返记号', confidence: 1 }];
+  assert.equal(validateAiWorldTurn(discoveredState, discoveredContract, discovered).ok, true);
+});
+
+test('AI addItems quantities are positive integers and cannot be zero or fractional', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我检查足迹', 'turn-item-quantity');
+  for (const amount of [0, -1, 0.5]) {
+    const narration = narrationWithText(`我记录下物资数量 ${amount}。`);
+    narration.effects = { addItems: { '问天剑': amount } };
+    const result = validateAiWorldTurn(state, contract, narration);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => /数量|正整数/.test(error)));
+  }
+});
+
+test('AI quest lifecycle progresses only active quests and completes after legal progress', () => {
+  const state = seededAiState();
+  state.quests.active = [{ id: 'herb-basket', progress: 0, target: 2 }];
+  const contract = createSceneContract(state, '我收集止血草', 'turn-quest-progress');
+  const narration = narrationWithText('我在樱林边缘收集到一株止血草，先把药篮扎紧。');
+  narration.effects = { questProgress: { 'herb-basket': 1 } };
+  narration.progress.advanced = ['quest:herb-basket:progress'];
+  assert.equal(validateAiWorldTurn(state, contract, narration).ok, true);
+  const progressed = commitValidatedWorldTurn(state, contract, narration);
+  assert.equal(progressed.quests.active[0].progress, 1);
+
+  const finishContract = createSceneContract(progressed, '我收集最后一株止血草', 'turn-quest-complete');
+  const finish = narrationWithText('我把最后一株止血草放入药篮，数量终于足够交差。');
+  finish.effects = { questProgress: { 'herb-basket': 1 }, completeQuests: ['herb-basket'] };
+  finish.progress.advanced = ['quest:herb-basket:complete'];
+  const completed = commitValidatedWorldTurn(progressed, finishContract, finish);
+  assert.deepEqual(completed.quests.active, []);
+  assert.ok(completed.quests.completed.includes('herb-basket'));
+
+  const failedState = seededAiState();
+  failedState.quests.active = [{ id: 'herb-basket', progress: 1, target: 2 }];
+  const failedContract = createSceneContract(failedState, '我放弃收集药草', 'turn-quest-fail');
+  const failed = narrationWithText('我确认药篮已经被雨水冲走，只能记下这次失败。');
+  failed.effects = { failQuests: ['herb-basket'] };
+  failed.progress.advanced = ['quest:herb-basket:failed'];
+  const failedResult = commitValidatedWorldTurn(failedState, failedContract, failed);
+  assert.deepEqual(failedResult.quests.active, []);
+  assert.ok(failedResult.quests.failed.includes('herb-basket'));
+});
+
+test('AI quest lifecycle rejects instant completion, future quests, mixed add, and complete/fail', () => {
+  const state = seededAiState();
+  state.quests.active = [{ id: 'herb-basket', progress: 0, target: 2 }];
+  const contract = createSceneContract(state, '我看见一篮草药', 'turn-quest-illegal');
+  const cases = [
+    { questProgress: {}, completeQuests: ['herb-basket'] },
+    { questProgress: { 'herb-basket': 3 }, completeQuests: ['herb-basket'] },
+    { addQuests: ['herb-basket'], questProgress: { 'herb-basket': 1 } },
+    { questProgress: { 'herb-basket': 1 }, completeQuests: ['herb-basket'], failQuests: ['herb-basket'] },
+    { questProgress: { 'final-tribulation': 1 } }
+  ];
+  for (const effects of cases) {
+    const narration = narrationWithText('我在原地整理药篮，暂不改变既有任务状态。');
+    narration.effects = effects;
+    const result = validateAiWorldTurn(state, contract, narration);
+    assert.equal(result.ok, false);
+    assert.ok(result.errors.some((error) => /任务|进度|完成|失败/.test(error)));
+  }
+});
+
+test('chapter exits require a pre-existing opportunity marker and structural prerequisites', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 0;
+  const contract = createSceneContract(state, '我决定交付证据', 'turn-exit-prerequisite');
+  assert.ok(contract.chapter.prerequisites.minCommittedTurns >= 1);
+  const narration = narrationWithText('我把证据交给执事，宗门随即开始封锁后山。');
+  narration.progress.advanced = ['chapter:act2-forest-signs:complete'];
+  assert.equal(validateAiWorldTurn(state, contract, narration).ok, false);
+
+  const markerState = structuredClone(state);
+  markerState.director.chapterTurns = 1;
+  markerState.director.openLoops = ['opportunity:act2-forest-signs'];
+  const markerContract = createSceneContract(markerState, '我决定交付证据', 'turn-exit-existing-opportunity');
+  const validExit = { ...narration, progress: { ...narration.progress, advanced: ['chapter:act2-forest-signs:complete'] } };
+  assert.equal(validateAiWorldTurn(markerState, markerContract, validExit).ok, true);
+
+  const sameTurn = { ...validExit, progress: { ...validExit.progress, advanced: ['opportunity:act2-forest-signs', 'chapter:act2-forest-signs:complete'] } };
+  const fresh = createSceneContract(structuredClone(state), '我决定交付证据', 'turn-exit-same-turn-marker');
+  assert.equal(validateAiWorldTurn(state, fresh, sameTurn).ok, false);
 });
 
 test('a world response with no progress is rejected', () => {
@@ -534,7 +638,9 @@ test('near-duplicate recent world turns are rejected as loops', () => {
 
 test('validated commits advance time clocks loops and authored chapters without local prose', () => {
   const state = seededAiState();
-  const contract = createSceneContract(state, '把证据交给执事', 'turn-8');
+  state.director.chapterTurns = 1;
+  state.director.openLoops = ['opportunity:act2-forest-signs'];
+  const contract = createSceneContract(state, '我决定交付证据给执事', 'turn-8');
   const narration = {
     blocks: [{ type: 'narr', text: '我把装着魔砂与足迹拓印的布包交到戒律堂案前。值守弟子先是皱眉，随后取出验魔针逐一核对；针尖转黑的刹那，堂内原本松散的说话声全停了。执事当场封住后山令牌，又派人通知巡山队改换暗号。我虽然暂时摆脱独自查证的风险，却也让藏在宗门里的眼线知道证据已经暴露。' }],
     effects: { qi: 12, spirit: -4 },
@@ -578,18 +684,24 @@ test('soft rails reject empty wandering but allow meaningful side routes and cha
   };
   assert.equal(validateAiWorldTurn(state, contract, sideRoute, []).ok, true);
 
+  const advancingState = structuredClone(state);
+  advancingState.director.chapterTurns = 1;
+  advancingState.director.openLoops = ['opportunity:act2-forest-signs'];
+  const advancingContract = createSceneContract(advancingState, '我决定交付证据', 'turn-rail-exit');
   const advancing = {
     ...wandering,
     progress: { ...wandering.progress, advanced: ['chapter:act2-forest-signs:complete'] }
   };
-  assert.equal(validateAiWorldTurn(state, contract, advancing, []).ok, true);
+  assert.equal(validateAiWorldTurn(advancingState, advancingContract, advancing, []).ok, true);
 });
 
 test('authored discovery progress creates the stable fact required by a chapter exit', () => {
   const state = seededAiState();
   state.memory.facts = [];
   state.memory.entities['npc:lin-xiaoman'].knownFactIds = [];
-  const contract = createSceneContract(state, '查清足迹并把证据交给宗门', 'turn-authored-fact');
+  state.director.chapterTurns = 1;
+  state.director.openLoops = ['opportunity:act2-forest-signs'];
+  const contract = createSceneContract(state, '我决定交付证据并查清足迹', 'turn-authored-fact');
   const narration = {
     ...narrationWithText('我在泥痕深处挑出几粒黑砂，验魔符贴近时立刻卷边发焦，足以证明这串足迹来自魔修。我用油纸封住样本，再把足印的方向与深浅逐一拓下，随后沿避雨石廊赶到戒律堂。值守弟子核对证据后敲响警钟，后山各处阵门随即落锁；我的发现终于迫使宗门正视潜入者。'),
     progress: {

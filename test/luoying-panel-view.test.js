@@ -71,6 +71,17 @@ test('completed legacy quest ids use a safe complete progress fallback', () => {
   assert.equal(completed.progress, completed.target);
 });
 
+test('failed quest view preserves the final ledger progress', () => {
+  const state = createGameState('照月', 'ai', () => 'panel-failed-progress');
+  state.quests.failed = ['herb-basket'];
+  state.quests.history = { 'herb-basket': { status: 'failed', progress: 2, target: 4 } };
+
+  const failed = buildQuestView(state).failed[0];
+
+  assert.equal(failed.progress, 2);
+  assert.equal(failed.target, 4);
+});
+
 test('inventory and codex only enrich committed discovery sources', () => {
   const state = createGameState('照月', 'ai', () => 'panels-discovered');
   state.inventory.items['问天剑'] = 1;

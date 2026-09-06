@@ -138,6 +138,21 @@ test('parser discards legacy AI suggestions while retaining progress data', () =
   assert.deepEqual(parsed.progress.advanced, ['discovery:zhao-token']);
 });
 
+test('parser preserves the constrained AI quest lifecycle effect fields', () => {
+  const parsed = parseNarration(JSON.stringify({
+    blocks: [{ type: 'narr', text: '我把止血草收进药篮。' }],
+    effects: {
+      questProgress: { 'herb-basket': 1 }, completeQuests: ['herb-basket'], failQuests: [],
+      addQuests: ['elder-wine']
+    },
+    progress: { advanced: ['quest:herb-basket:progress'] }, memory: {}, timeCost: 'brief'
+  }));
+  assert.deepEqual(parsed.effects.questProgress, { 'herb-basket': 1 });
+  assert.deepEqual(parsed.effects.completeQuests, ['herb-basket']);
+  assert.deepEqual(parsed.effects.failQuests, []);
+  assert.deepEqual(parsed.effects.addQuests, ['elder-wine']);
+});
+
 test('narration prompt requests free-text world data without suggested actions', () => {
   const state = createGameState('照月', 'ai');
   const messages = buildNarrationPrompt(state, [], '查看门缝');

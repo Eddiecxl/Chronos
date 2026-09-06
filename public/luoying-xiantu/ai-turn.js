@@ -20,6 +20,7 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 6. 灵气用于境界突破；灵力用于功法消耗，两者绝不混用。场景契约 player 内的 qi、spirit 与上限是绝对事实；正文若提到当前数值或充盈/耗尽状态，必须与它完全一致。qi、spirit、hp、effects、progress 等 JSON 字段只用于结构，绝不能出现在玩家可见正文，正文统一写“灵气、灵力、气血”等中文术语。
 7. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
 8. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总，其键优先使用 actors 中的精确 id（兼容 name），不得自创 actor: 前缀。NPC 可在 dlg 对白中用“你”称呼我。
+9. 任务只允许按场景契约 activeQuests 操作：questProgress 只能推进本回合开始前已接取任务，completeQuests 必须同回合推进至 target，failQuests 只能失败已接取任务；addQuests 不得与推进、完成或失败同回合发生。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
 {"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"timeCost":"instant|brief|scene|long"}`;
 
@@ -56,12 +57,14 @@ function compactContract(contract) {
     legalItemIds: contract.legalItemIds,
     legalLocations: contract.legalLocations,
     legalQuestIds: contract.legalQuestIds,
+    activeQuests: contract.activeQuests,
     legalRelationshipIds: contract.legalRelationshipIds,
     effectCaps: contract.effectCaps,
     idleLimit: contract.idleLimit,
     consecutiveIdleTurns: contract.consecutiveIdleTurns,
     pace: contract.pace,
-    player: contract.player
+    player: contract.player,
+    questProtocol: '仅可对 activeQuests 中本回合开始已有任务使用 questProgress；completeQuests 必须同回合推进至 target，failQuests 仅可作用于已接取任务；不得在 addQuests 同回合推进、完成或失败。'
   };
 }
 
@@ -156,7 +159,13 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       if (!validation?.ok) throw new Error(`AI 内容连续 ${maxAttempts} 次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
 
       let committed = commitValidatedWorldTurn(state, contract, narration);
-      committed = registerEntityCandidates(committed, narration.memory?.entities || [], txId);
+      const visibleNames = new Set((narration.blocks || [])
+        .filter((block) => block?.type === 'dlg' && Array.isArray(block.factIds))
+        .map((block) => String(block.name || '').trim()).filter(Boolean));
+      const visibleEntityIds = (narration.memory?.entities || [])
+        .filter((entity) => visibleNames.has(String(entity?.name || '').trim()))
+        .map((entity) => entity.id);
+      committed = registerEntityCandidates(committed, narration.memory?.entities || [], txId, { visibleEntityIds });
       committed = applyMemoryCandidates(committed, narration.memory?.facts || [], txId);
       committed = applyCommittedDiscoveries(committed, narration);
       if (narration.memory?.chapterSummary) {

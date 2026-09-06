@@ -77,6 +77,21 @@ test('AI relationship effects change affinity without discovering an unseen char
   assert.equal(localApplied.codex.characters.includes('林小满'), true);
 });
 
+test('AI item effects require positive integer quantities and low-level item writes discover only actual gains', () => {
+  const state = createGameState('照月', 'ai', () => 'item-quantity-boundary');
+  state.inventory.items['问天剑'] = 1;
+
+  const zero = applyValidatedEffects(state, { addItems: { '问天剑': 0 } });
+  const negative = applyValidatedEffects(state, { addItems: { '问天剑': -1 } });
+  assert.equal(zero.codex.items.includes('问天剑'), false);
+  assert.equal(negative.codex.items.includes('问天剑'), false);
+  assert.equal(negative.inventory.items['问天剑'], 1);
+
+  const gained = applyValidatedEffects(state, { addItems: { '问天剑': 1 } });
+  assert.equal(gained.inventory.items['问天剑'], 2);
+  assert.equal(gained.codex.items.includes('问天剑'), true);
+});
+
 test('mercy path unlocks the guardian ending', () => {
   const state = createGameState();
   state.pending = { type: 'final-choice' };

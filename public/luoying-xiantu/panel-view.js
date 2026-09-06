@@ -29,16 +29,16 @@ function characterDetails(state, name) {
   };
 }
 
-function questDetails(id, status, active = {}) {
+function questDetails(id, status, active = {}, history = {}) {
   const entry = QUESTS[id];
-  const target = Math.max(1, Number(active.target || entry?.target || 1));
+  const target = Math.max(1, Number(active.target || history.target || entry?.target || 1));
   return {
     id,
     status,
     title: entry?.title || id,
     type: entry?.type || 'unknown',
     description: entry?.description || '这段经历已被记录。',
-    progress: status === 'completed' ? target : Math.max(0, Number(active.progress || 0)),
+    progress: status === 'completed' ? target : Math.max(0, Number(active.progress ?? history.progress ?? 0)),
     target
   };
 }
@@ -79,10 +79,11 @@ export function buildCharacterView(state) {
 
 export function buildQuestView(state) {
   const active = Array.isArray(state.quests?.active) ? state.quests.active : [];
+  const history = state.quests?.history || {};
   return {
     active: active.filter((entry) => entry?.id).map((entry) => questDetails(entry.id, 'active', entry)),
-    completed: list(state.quests?.completed).map((id) => questDetails(id, 'completed')),
-    failed: list(state.quests?.failed).map((id) => questDetails(id, 'failed'))
+    completed: list(state.quests?.completed).map((id) => questDetails(id, 'completed', {}, history[id])),
+    failed: list(state.quests?.failed).map((id) => questDetails(id, 'failed', {}, history[id]))
   };
 }
 

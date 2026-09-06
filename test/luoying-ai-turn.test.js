@@ -4,6 +4,7 @@ import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { createTranscriptStore } from '../public/luoying-xiantu/transcript-store.js';
 import { createAiTurnRunner } from '../public/luoying-xiantu/ai-turn.js';
 import { createStorage } from '../public/luoying-xiantu/storage.js';
+import { buildHistoryView } from '../public/luoying-xiantu/panel-view.js';
 
 function memoryStorage(seed = {}) {
   const values = new Map(Object.entries(seed));
@@ -38,7 +39,10 @@ function detailedFirstPerson(text) {
 }
 
 const validWorldResponse = (text = '门缝外掠过两道人影，林小满正躲在雨幕里向我示警，其中一人腰间挂着赵府铁牌。') => JSON.stringify({
-  blocks: [{ type: 'narr', text: detailedFirstPerson(text) }], effects: { qi: 8 },
+  blocks: [
+    { type: 'narr', text: detailedFirstPerson(text) },
+    { type: 'dlg', name: '赵府斥候', text: '柴房里没有动静。', factIds: [] }
+  ], effects: { qi: 8 },
   progress: { advanced: ['discovery:zhao-scouts'], consequences: ['追兵开始搜查柴房'], openLoops: ['loop:escape-route'], dangerClocks: { zhaoPursuit: 1 } },
   memory: {
     facts: [{ subjectId: 'world:pursuit', predicate: 'identified', object: '柴房外有两名赵府追兵', confidence: 1 }],
@@ -197,6 +201,29 @@ test('AI relationship effects require visible validated dialogue before a comple
   assert.equal(withDialogue.ok, true);
   assert.equal(withDialogue.state.relationships['赵天霸'], dialogueState.relationships['赵天霸'] - 4);
   assert.equal(withDialogue.state.codex.characters.includes('赵天霸'), true);
+});
+
+test('unseen NPC and location facts reject the whole AI turn without leaking into history', async () => {
+  const transcriptStore = createTranscriptStore({ memory: new Map() });
+  const runner = runnerWithNarrator(async () => JSON.stringify({
+    blocks: [{ type: 'narr', text: detailedFirstPerson('我只看见柴房门缝里的雨水，没有见到林小满或幽冥裂隙。') }],
+    effects: {},
+    progress: { advanced: ['scene:hidden-fact'], consequences: ['我继续守在柴房'], openLoops: ['loop:escape-route'], dangerClocks: { zhaoPursuit: 1 } },
+    memory: {
+      facts: [
+        { subjectId: 'npc:lin-xiaoman', predicate: 'waits', object: '林小满正在未来章节等待', confidence: 1 },
+        { subjectId: 'location:nether-rift', predicate: 'contains', object: '幽冥裂隙深处藏着魔门', confidence: 1 }
+      ],
+      entities: []
+    },
+    timeCost: 'brief'
+  }), transcriptStore);
+  const state = seededAiState();
+  const result = await runner.runWorld({ state, input: '我检查柴房门缝', settings: { provider: 'groq' } });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
+  assert.equal(buildHistoryView(result.state || state).facts.some((fact) => /林小满|幽冥裂隙/.test(fact)), false);
 });
 
 test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {
