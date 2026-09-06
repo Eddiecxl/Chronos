@@ -25,6 +25,7 @@ function seededAiState() {
       facts: ['fact:forest-footprints'], createdTurnId: 'world-bible', lastSeenTurn: 4
     }
   };
+  state.codex.characters.push('林小满');
   return state;
 }
 
@@ -256,7 +257,7 @@ test('a pre-existing decisive opportunity may resolve naturally after the player
     openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
   };
   const afterMarker = commitValidatedWorldTurn(state, firstContract, marker);
-  const nextContract = createSceneContract(afterMarker, '我决定前往百宝坊市交付线索', 'turn-opportunity-choice');
+  const nextContract = createSceneContract(afterMarker, '我决定前往青石镇交付线索', 'turn-opportunity-choice');
   const chosen = narrationWithText('我顺着已经显露的机会离开樱林，将线索送往可以继续追查的雨巷。');
   chosen.blocks[0].text = `我把证物收进衣襟，沿着夜雨中的石阶赶往青石镇。巷口的灯火映在积水里，巡查的脚步从身后渐远；我借着摊棚遮掩穿过人群，终于抵达能继续追查线索的地方。${'甲乙丙丁戊己庚辛'.repeat(24)}`;
   chosen.effects = { location: '青石镇' };
@@ -267,6 +268,33 @@ test('a pre-existing decisive opportunity may resolve naturally after the player
 
   assert.ok(nextContract.openLoopIds.includes(nextContract.pace.opportunityId));
   assert.equal(validateAiWorldTurn(afterMarker, nextContract, chosen).ok, true);
+});
+
+test('a negative or targetless choice cannot turn a prior opportunity into a decision effect', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 8;
+  state.director.openLoops = ['opportunity:act2-forest-signs'];
+  const rejectedContract = createSceneContract(state, '我决定不去青石镇，暂时留在原地', 'turn-negative-choice');
+  const movement = narrationWithText('我把证物收进衣襟，雨水沿石阶流向镇口。远处坊市的灯火仍在雨幕里摇晃，我却停在原地重新查看脚边的泥痕；赵府的巡查声逐渐靠近，局势没有给我更多犹豫的余地。');
+  movement.effects = { location: '青石镇' };
+  movement.progress = {
+    advanced: ['scene:opportunity-refused'], consequences: ['我暂不离开樱林'],
+    openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
+  };
+  const rejected = validateAiWorldTurn(state, rejectedContract, movement);
+  assert.equal(rejected.ok, false);
+  assert.ok(rejected.errors.some((error) => /选择/.test(error)));
+
+  const acceptedContract = createSceneContract(state, '我接受小满的药篮，立刻去收集止血草', 'turn-quest-choice');
+  const quest = {
+    ...movement,
+    effects: { addQuests: ['herb-basket'] },
+    progress: {
+      advanced: ['quest:herb-basket:accepted'], consequences: ['我接下收集止血草的委托'],
+      openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
+    }
+  };
+  assert.equal(validateAiWorldTurn(state, acceptedContract, quest).ok, true);
 });
 
 test('completed quests cannot be re-added as material chapter progress', () => {

@@ -22,6 +22,7 @@ test('validated facts persist by stable entity id and source turn', () => {
     id: 'npc:lin-xiaoman', kind: 'npc', name: '林小满', status: 'alive', location: '落霞宗外门',
     purpose: '与主角共同成长', knownFactIds: [], facts: []
   };
+  state.codex.characters.push('林小满');
   const next = applyMemoryCandidates(state, [{
     subjectId: 'npc:lin-xiaoman', predicate: 'promised', object: '共赴青岚秘境', confidence: 1
   }], 'turn-7');
@@ -47,6 +48,19 @@ test('unseen core location facts cannot enter memory before the location is disc
 
   assert.equal(next.memory.entities['location:nether-rift'], undefined);
   assert.equal(next.memory.facts.some((fact) => fact.object.includes('幽冥裂隙')), false);
+});
+
+test('a legacy entity record alone does not make a hidden fact player-visible', () => {
+  const state = createGameState('照月', 'ai');
+  state.memory.entities['npc:lin-xiaoman'] = {
+    id: 'npc:lin-xiaoman', kind: 'npc', name: '林小满', status: 'alive', location: '落霞宗外门',
+    purpose: '旧存档遗留的世界登记', knownFactIds: [], facts: []
+  };
+  const next = applyMemoryCandidates(state, [{
+    subjectId: 'npc:lin-xiaoman', predicate: 'hidden', object: '林小满仍在未到达的山门等候', confidence: 1
+  }], 'turn-legacy-hidden');
+
+  assert.equal(next.memory.facts.some((fact) => fact.predicate === 'hidden'), false);
 });
 
 test('duplicate facts do not multiply and locked facts cannot be replaced', () => {

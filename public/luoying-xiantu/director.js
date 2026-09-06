@@ -2,6 +2,7 @@ import { migrateGameState } from './game-state.js';
 import { applyValidatedEffects } from './game-engine.js';
 import { CHAPTERS, ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
 import { derivedPlayerStats } from './equipment.js';
+import { hasVisibleFactEvidence, visibleTextFor } from './discovery.js';
 
 const TIME_COSTS = { instant: 0, brief: 10, scene: 60, long: 240 };
 const EFFECT_CAPS = {
@@ -429,21 +430,44 @@ function validatedDialogueSubjects(contract, blocks) {
   return subjects;
 }
 
+function authoredNpcName(subjectId) {
+  return AUTHORED_NPCS_BY_ID.get(subjectId)?.name || '';
+}
+
+function subjectNpcName(state, subjectId) {
+  return authoredNpcName(subjectId) || cleanText(state.memory.entities?.[subjectId]?.name, 40);
+}
+
+function npcDiscovered(state, subjectId, visibleSubjects) {
+  if (visibleSubjects.has(subjectId)) return true;
+  const name = subjectNpcName(state, subjectId);
+  return Boolean(name && state.codex.characters.includes(name));
+}
+
+function locationDiscovered(state, subjectId, normalizedEffects, visibleText) {
+  const entry = Object.entries(LOCATIONS).find(([, location]) => location.id === subjectId);
+  if (!entry) return false;
+  const [name] = entry;
+  return state.story.location === name || state.codex.locations.includes(name)
+    || (normalizedEffects?.location === name && visibleText.includes(name));
+}
+
+function generatedNpcCandidate(candidate, visibleText) {
+  const id = cleanId(candidate?.id);
+  const name = cleanText(candidate?.name, 40);
+  const purpose = cleanText(candidate?.purpose, 160);
+  const location = cleanText(candidate?.location, 80);
+  return Boolean(candidate?.kind === 'npc' && id.startsWith('generated:npc:') && name && purpose && location
+    && visibleText.includes(name));
+}
+
 function validateMemoryFactVisibility(state, contract, narration, normalizedEffects, errors) {
   const candidates = Array.isArray(narration?.memory?.entities) ? narration.memory.entities : [];
-  const candidateById = new Map(candidates.map((entity) => [cleanId(entity?.id), entity]));
+  const visibleText = visibleTextFor(narration);
+  const candidateById = new Map(candidates.filter((entity) => generatedNpcCandidate(entity, visibleText))
+    .map((entity) => [cleanId(entity?.id), entity]));
   const visibleSubjects = validatedDialogueSubjects(contract, narration.blocks || []);
-  for (const candidate of candidates) {
-    const id = cleanId(candidate?.id);
-    const name = cleanText(candidate?.name, 40);
-    if (id && name && (narration.blocks || []).some((block) => block?.type === 'dlg'
-      && cleanText(block.name, 40) === name && Array.isArray(block.factIds) && block.factIds.length)) {
-      visibleSubjects.add(id);
-    }
-  }
-  const visibleText = (narration.blocks || []).map((block) => `${block?.name || ''}${block?.text || ''}`).join('');
-  const currentLocationId = contract.location.id;
-  const currentLocationName = contract.location.name;
+  for (const id of candidateById.keys()) visibleSubjects.add(id);
   const positiveItems = new Set(Object.entries(normalizedEffects?.addItems || {})
     .filter(([, amount]) => Number.isInteger(amount) && amount > 0)
     .map(([name]) => name));
@@ -451,19 +475,43 @@ function validateMemoryFactVisibility(state, contract, narration, normalizedEffe
   for (const raw of subjects) {
     const subjectId = cleanId(raw?.subjectId);
     if (!subjectId) continue;
-    const known = state.memory.entities[subjectId];
-    const currentLocation = subjectId === currentLocationId || subjectId === currentLocationName;
-    const generic = subjectId.startsWith('world:') || subjectId.startsWith('loop:') || subjectId.startsWith('quest:')
-      || subjectId === 'player' || subjectId.startsWith('player:');
-    const visibleActor = visibleSubjects.has(subjectId);
-    const visibleGenerated = candidateById.has(subjectId) && visibleSubjects.has(subjectId);
-    const destinationEntry = Object.entries(LOCATIONS).find(([, location]) => location.id === subjectId);
-    const movedToLocation = destinationEntry && normalizedEffects?.location === destinationEntry[0]
-      && visibleText.includes(destinationEntry[0]);
+    if (subjectId === 'player' || subjectId.startsWith('player:')) continue;
+    if (subjectId.startsWith('world:')) {
+      if (!hasVisibleFactEvidence(raw, visibleText)) {
+        errors.push(`世界记忆事实 ${subjectId} 缺少本回合可见正文的直接证据。`);
+      }
+      const factText = `${cleanText(raw?.predicate, 48)} ${cleanText(raw?.object, 160)}`;
+      for (const [id, npc] of AUTHORED_NPCS_BY_ID) {
+        if (factText.includes(npc.name) && !npcDiscovered(state, id, visibleSubjects)) {
+          errors.push(`世界记忆事实引用了未发现角色：${npc.name}。`);
+        }
+      }
+      for (const [name, location] of Object.entries(LOCATIONS)) {
+        if (factText.includes(name) && !locationDiscovered(state, location.id, normalizedEffects, visibleText)) {
+          errors.push(`世界记忆事实引用了未发现地点：${name}。`);
+        }
+      }
+      continue;
+    }
+    if (subjectId.startsWith('npc:') || subjectId.startsWith('generated:npc:')) {
+      if (!npcDiscovered(state, subjectId, visibleSubjects)) errors.push(`记忆事实 ${subjectId} 缺少当前、已发现或本回合可见验证证据。`);
+      continue;
+    }
+    if (subjectId.startsWith('location:')) {
+      if (!locationDiscovered(state, subjectId, normalizedEffects, visibleText)) errors.push(`记忆事实 ${subjectId} 缺少当前、已发现或本回合可见验证证据。`);
+      continue;
+    }
     const itemName = subjectId.startsWith('item:') ? subjectId.slice('item:'.length) : '';
-    const itemEvidence = itemName && (Number(state.inventory.items?.[itemName] || 0) > 0 || positiveItems.has(itemName))
+    const itemEvidence = itemName && (Number(state.inventory.items?.[itemName] || 0) > 0
+      || state.codex.items.includes(itemName) || positiveItems.has(itemName))
       && visibleText.includes(itemName);
-    if (generic || known || currentLocation || visibleActor || visibleGenerated || movedToLocation || itemEvidence) continue;
+    if (itemEvidence) continue;
+    if (subjectId.startsWith('quest:')) {
+      const questId = subjectId.slice('quest:'.length);
+      if (state.quests.active.some((quest) => quest.id === questId) || state.quests.completed.includes(questId)
+        || state.quests.failed.includes(questId) || normalizedEffects?.addQuests?.includes(questId)) continue;
+    }
+    if (subjectId.startsWith('loop:') && contract.openLoopIds.includes(subjectId)) continue;
     errors.push(`记忆事实 ${subjectId} 缺少当前、已发现或本回合可见验证证据。`);
   }
 }
@@ -559,8 +607,19 @@ function validateQuestLifecycle(state, contract, normalizedEffects, errors) {
   }
 }
 
-function playerChoseOpportunity(input) {
-  return /(?:我)?(?:决定|选择|前往|进入|交付|接受|答应|同意|要去|去往|赶往)/u.test(String(input || ''));
+function playerChoseOpportunity(input, effects = {}) {
+  const text = String(input || '').trim();
+  if (/(?:不去|不前往|不进入|拒绝|暂不|不要|稍后|不接受|不答应|不交付|不选择|不决定)/u.test(text)) return false;
+  if (!/(?:我)?(?:决定|选择|前往|进入|交付|接受|答应|同意|要去|去往|赶往)/u.test(text)) return false;
+  const targets = [];
+  if (effects?.location) {
+    const location = Object.entries(LOCATIONS).find(([name, entry]) => name === effects.location || entry.id === effects.location);
+    targets.push(location?.[0] || String(effects.location));
+  }
+  for (const questId of Array.isArray(effects?.addQuests) ? effects.addQuests : []) {
+    targets.push(QUESTS[questId]?.title || String(questId));
+  }
+  return !targets.length || targets.some((target) => target && text.includes(target));
 }
 
 function validateDecisiveOpportunityEffects(contract, advanced, normalizedEffects, errors) {
@@ -570,7 +629,7 @@ function validateDecisiveOpportunityEffects(contract, advanced, normalizedEffect
   const decisionEffects = Boolean(normalizedEffects.location || normalizedEffects.addQuests?.length);
   if (introducedNow && decisionEffects) {
     errors.push('决定性机会只能呈现给玩家，不能在同一回合替玩家决定地点或接取任务。');
-  } else if (decisionEffects && (!contract.openLoopIds.includes(opportunityId) || !playerChoseOpportunity(contract.playerInput))) {
+  } else if (decisionEffects && (!contract.openLoopIds.includes(opportunityId) || !playerChoseOpportunity(contract.playerInput, normalizedEffects))) {
     errors.push('地点或任务的决定效果必须在既有机会后由玩家本回合明确选择。');
   }
 }
@@ -668,7 +727,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
     const markerBeforeTurn = contract.openLoopIds.includes(opportunityId);
     if (!markerBeforeTurn) errors.push('章节出口必须建立在上一回合已提交的决定性机会之上。');
     if (advanced.includes(opportunityId) && !markerBeforeTurn) errors.push('决定性机会不能与章节出口在同一回合首次提交。');
-    if (!playerChoseOpportunity(contract.playerInput)) errors.push('章节出口必须由玩家本回合明确选择已存在的机会。');
+    if (!playerChoseOpportunity(contract.playerInput, narration.effects)) errors.push('章节出口必须由玩家本回合明确选择已存在的机会。');
     if (contract.pace.chapterTurns < contract.chapter.prerequisites.minCommittedTurns) {
       errors.push('章节出口尚未满足最少已提交回合数。');
     }

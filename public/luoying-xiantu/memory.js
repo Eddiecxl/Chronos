@@ -1,5 +1,6 @@
 import { migrateGameState } from './game-state.js';
-import { LOCATIONS } from './game-data.js';
+import { ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
+import { hasVisibleFactEvidence } from './discovery.js';
 
 const cleanText = (value, max) => String(value ?? '').replace(/[<>\u0000-\u001f]/g, '').trim().slice(0, max);
 const cleanId = (value, max = 80) => cleanText(value, max).replace(/[^\p{L}\p{N}_.:/\-]/gu, '');
@@ -24,6 +25,53 @@ function trimFacts(facts) {
   const locked = facts.filter((fact) => fact.locked).slice(0, 500);
   const room = 500 - locked.length;
   return [...locked, ...facts.filter((fact) => !fact.locked).slice(-room)];
+}
+
+function subjectName(state, subjectId) {
+  const authored = Object.entries(NPCS).find(([, npc]) => npc.id === subjectId);
+  if (authored) return authored[0];
+  return cleanText(state.memory.entities?.[subjectId]?.name, 40);
+}
+
+function knownNpc(state, subjectId, visibleSubjectIds) {
+  const name = subjectName(state, subjectId);
+  return Boolean(name && (state.codex.characters.includes(name) || visibleSubjectIds.has(subjectId)));
+}
+
+function knownLocation(state, subjectId, visibleText, movedLocationIds) {
+  const entry = Object.entries(LOCATIONS).find(([, location]) => location.id === subjectId);
+  if (!entry) return false;
+  const [name] = entry;
+  return state.story.location === name || state.codex.locations.includes(name)
+    || (movedLocationIds.has(subjectId) && visibleText.includes(name));
+}
+
+function allowedMemorySubject(state, raw, options = {}) {
+  const subjectId = cleanId(raw?.subjectId);
+  const visibleText = cleanText(options.visibleText || '', 12_000);
+  const visibleSubjectIds = new Set(Array.isArray(options.visibleSubjectIds)
+    ? options.visibleSubjectIds.map((id) => cleanId(id)).filter(Boolean) : []);
+  const movedLocationIds = new Set(Array.isArray(options.movedLocationIds)
+    ? options.movedLocationIds.map((id) => cleanId(id)).filter(Boolean) : []);
+  const positiveItems = new Set(Array.isArray(options.positiveItems)
+    ? options.positiveItems.map((name) => cleanText(name, 40)).filter(Boolean) : []);
+  const acceptedQuestIds = new Set(Array.isArray(options.acceptedQuestIds)
+    ? options.acceptedQuestIds.map((id) => cleanId(id)).filter(Boolean) : []);
+  if (!subjectId || subjectId === 'player' || subjectId.startsWith('player:')) return Boolean(subjectId);
+  if (subjectId.startsWith('world:')) return hasVisibleFactEvidence(raw, visibleText);
+  if (subjectId.startsWith('npc:') || subjectId.startsWith('generated:npc:')) return knownNpc(state, subjectId, visibleSubjectIds);
+  if (subjectId.startsWith('location:')) return knownLocation(state, subjectId, visibleText, movedLocationIds);
+  if (subjectId.startsWith('item:')) {
+    const name = subjectId.slice('item:'.length);
+    return Boolean(ITEMS[name] && (Number(state.inventory.items?.[name] || 0) > 0
+      || state.codex.items.includes(name) || positiveItems.has(name)) && visibleText.includes(name));
+  }
+  if (subjectId.startsWith('quest:')) {
+    const id = subjectId.slice('quest:'.length);
+    return Boolean(QUESTS[id] && (state.quests.active.some((quest) => quest.id === id)
+      || state.quests.completed.includes(id) || state.quests.failed.includes(id) || acceptedQuestIds.has(id)));
+  }
+  return subjectId.startsWith('loop:') && state.director.openLoops.includes(subjectId);
 }
 
 export function registerEntityCandidates(source, candidates = [], turnId = 'unknown', options = {}) {
@@ -63,7 +111,7 @@ export function registerEntityCandidates(source, candidates = [], turnId = 'unkn
   return migrateGameState(state);
 }
 
-export function applyMemoryCandidates(source, candidates = [], turnId = 'unknown') {
+export function applyMemoryCandidates(source, candidates = [], turnId = 'unknown', options = {}) {
   const state = migrateGameState(source);
   if (!Array.isArray(candidates)) return state;
   const safeTurnId = cleanId(turnId) || 'unknown';
@@ -74,9 +122,7 @@ export function applyMemoryCandidates(source, candidates = [], turnId = 'unknown
     const subjectId = cleanId(raw.subjectId);
     const predicate = cleanId(raw.predicate, 48);
     const object = cleanText(raw.object, 160);
-    const currentLocationId = LOCATIONS[state.story.location]?.id;
-    const allowedSubject = subjectId.startsWith('loop:') || subjectId.startsWith('quest:')
-      || subjectId.startsWith('world:') || subjectId === currentLocationId || state.memory.entities[subjectId];
+    const allowedSubject = allowedMemorySubject(state, raw, options);
     if (!subjectId || !predicate || !object || !allowedSubject) continue;
 
     const lockedConflict = state.memory.facts.some((fact) => fact.locked

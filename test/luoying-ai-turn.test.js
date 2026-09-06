@@ -5,6 +5,7 @@ import { createTranscriptStore } from '../public/luoying-xiantu/transcript-store
 import { createAiTurnRunner } from '../public/luoying-xiantu/ai-turn.js';
 import { createStorage } from '../public/luoying-xiantu/storage.js';
 import { buildHistoryView } from '../public/luoying-xiantu/panel-view.js';
+import { answerSystemQuery } from '../public/luoying-xiantu/turn-router.js';
 
 function memoryStorage(seed = {}) {
   const values = new Map(Object.entries(seed));
@@ -38,7 +39,7 @@ function detailedFirstPerson(text) {
   return `我贴近门缝，先听见鞋底碾过碎石的轻响，才从木板裂隙看清${text}我没有贸然推门，而是顺着墙角继续观察。雨水正从破瓦滴到草席边缘，屋外灯影每隔片刻便掠过一次；后窗的旧插销已经松动，药车轮印则一直通向巷口。这些细节给了我新的退路，也让追兵开始缩小搜查范围。`;
 }
 
-const validWorldResponse = (text = '门缝外掠过两道人影，林小满正躲在雨幕里向我示警，其中一人腰间挂着赵府铁牌。') => JSON.stringify({
+const validWorldResponse = (text = '我看见柴房外有两名赵府追兵，其中一人腰间挂着赵府铁牌。') => JSON.stringify({
   blocks: [
     { type: 'narr', text: detailedFirstPerson(text) },
     { type: 'dlg', name: '赵府斥候', text: '柴房里没有动静。', factIds: [] }
@@ -224,6 +225,72 @@ test('unseen NPC and location facts reject the whole AI turn without leaking int
   assert.equal(result.ok, false);
   assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
   assert.equal(buildHistoryView(result.state || state).facts.some((fact) => /林小满|幽冥裂隙/.test(fact)), false);
+});
+
+test('world facts need committed visible evidence and cannot reveal undiscovered authored people or places', async () => {
+  const transcriptStore = createTranscriptStore({ memory: new Map() });
+  const leaked = JSON.parse(validWorldResponse());
+  leaked.memory.facts = [{
+    subjectId: 'world:ascension', predicate: 'foretells', object: '飞升台上的林小满已知晓我的命数', confidence: 1
+  }];
+  const runner = runnerWithNarrator(async () => JSON.stringify(leaked), transcriptStore);
+  const state = seededAiState();
+  const result = await runner.runWorld({ state, input: '我检查柴房门缝', settings: { provider: 'groq' } });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
+  assert.equal(buildHistoryView(result.state || state).facts.some((fact) => /飞升台|林小满/.test(fact)), false);
+});
+
+test('AI chapter summaries are derived only from committed visible blocks', async () => {
+  const response = JSON.parse(validWorldResponse());
+  response.memory.chapterSummary = '我已抵达飞升台，并与林小满完成了最后的约定。';
+  const result = await runnerWithNarrator(async () => JSON.stringify(response))
+    .runWorld({ state: seededAiState(), input: '我检查柴房门缝', settings: { provider: 'groq' } });
+
+  assert.equal(result.ok, true);
+  const summaries = buildHistoryView(result.state).summaries.join('\n');
+  const recap = answerSystemQuery(result.state, '回顾之前发生的事').blocks.map((block) => block.text).join('\n');
+  assert.doesNotMatch(summaries, /飞升台|林小满/);
+  assert.doesNotMatch(recap, /飞升台|林小满/);
+  assert.match(summaries, /我/);
+  assert.match(summaries, /赵府|柴房|门缝|雨/);
+});
+
+test('a generated NPC can be registered and discovered when visible narration introduces it', async () => {
+  const response = JSON.parse(validWorldResponse());
+  response.blocks = [{
+    type: 'narr',
+    text: detailedFirstPerson('我贴着柴房后墙挪开腐木，雨巷里忽然传来药篓相撞的轻响。一个自称秋药师的陌生修士撑着油纸伞停在缺口外，他把沾泥的药篓搁到石阶上，低声提醒我赵府的人正在搜后巷。我看清他袖口绣着草叶纹，也看清他始终没有靠近门槛；这条后路或许能问出更多消息。')
+  }];
+  response.memory.entities = [{
+    id: 'generated:npc:herbalist-qiu', kind: 'npc', name: '秋药师', location: '赵府柴房', purpose: '在雨巷中收集伤药', traits: ['谨慎']
+  }];
+  response.memory.facts = [{
+    subjectId: 'generated:npc:herbalist-qiu', predicate: 'warned', object: '秋药师提醒赵府正在搜查后巷', confidence: 1
+  }];
+  const result = await runnerWithNarrator(async () => JSON.stringify(response))
+    .runWorld({ state: seededAiState(), input: '我观察柴房后巷', settings: { provider: 'groq' } });
+
+  assert.equal(result.ok, true, result.error);
+  assert.equal(result.state.memory.entities['generated:npc:herbalist-qiu'].name, '秋药师');
+  assert.ok(result.state.codex.characters.includes('秋药师'));
+});
+
+test('a generated NPC named only in memory facts cannot be registered or discovered', async () => {
+  const response = JSON.parse(validWorldResponse());
+  response.memory.entities = [{
+    id: 'generated:npc:hidden-qiu', kind: 'npc', name: '秋药师', location: '赵府柴房', purpose: '只藏在模型记忆字段中', traits: ['谨慎']
+  }];
+  response.memory.facts = [{
+    subjectId: 'generated:npc:hidden-qiu', predicate: 'waits', object: '秋药师正在后巷等待', confidence: 1
+  }];
+  const transcriptStore = createTranscriptStore({ memory: new Map() });
+  const result = await runnerWithNarrator(async () => JSON.stringify(response), transcriptStore)
+    .runWorld({ state: seededAiState(), input: '我观察柴房后巷', settings: { provider: 'groq' } });
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(await transcriptStore.allTurns('ai-journey'), []);
 });
 
 test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {

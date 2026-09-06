@@ -6,7 +6,7 @@ import {
 import {
   applyMemoryCandidates, registerEntityCandidates, selectRelevantMemory, updateChapterSummary
 } from './memory.js';
-import { applyCommittedDiscoveries } from './discovery.js';
+import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, visibleTextFor } from './discovery.js';
 import { answerSystemQuery } from './turn-router.js';
 import { LOCATIONS } from './game-data.js';
 
@@ -159,18 +159,21 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       if (!validation?.ok) throw new Error(`AI 内容连续 ${maxAttempts} 次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
 
       let committed = commitValidatedWorldTurn(state, contract, narration);
-      const visibleNames = new Set((narration.blocks || [])
-        .filter((block) => block?.type === 'dlg' && Array.isArray(block.factIds))
-        .map((block) => String(block.name || '').trim()).filter(Boolean));
+      const visibleText = visibleTextFor(narration);
       const visibleEntityIds = (narration.memory?.entities || [])
-        .filter((entity) => visibleNames.has(String(entity?.name || '').trim()))
+        .filter((entity) => visibleText.includes(String(entity?.name || '').trim()))
         .map((entity) => entity.id);
       committed = registerEntityCandidates(committed, narration.memory?.entities || [], txId, { visibleEntityIds });
-      committed = applyMemoryCandidates(committed, narration.memory?.facts || [], txId);
+      committed = applyMemoryCandidates(committed, narration.memory?.facts || [], txId, {
+        visibleText,
+        visibleSubjectIds: visibleEntityIds,
+        movedLocationIds: committed.story.location === state.story.location ? [] : [LOCATIONS[committed.story.location]?.id],
+        positiveItems: Object.entries(validation.normalizedEffects?.addItems || {})
+          .filter(([, amount]) => Number(amount) > 0).map(([name]) => name),
+        acceptedQuestIds: validation.normalizedEffects?.addQuests || []
+      });
       committed = applyCommittedDiscoveries(committed, narration);
-      if (narration.memory?.chapterSummary) {
-        committed = updateChapterSummary(committed, contract.chapter.id, narration.memory.chapterSummary);
-      }
+      committed = updateChapterSummary(committed, contract.chapter.id, chapterSummaryFromVisibleBlocks(narration));
 
       const turn = {
         id: txId,
