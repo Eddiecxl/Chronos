@@ -98,6 +98,18 @@ export function buildMapView(state) {
     .sort((a, b) => Number(b.current) - Number(a.current));
 }
 
+// Local journeys intentionally keep their original, rules-driven atlas.  Unlike
+// the AI journey's discovery view, an unlocked local destination is always
+// actionable even before its codex entry has been written.
+export function buildLocalMapView(state) {
+  return Object.entries(LOCATIONS).map(([name, location]) => ({
+    name,
+    ...location,
+    current: name === state.story?.location,
+    unlocked: state.story?.act >= location.act && state.player?.realm >= location.realm
+  }));
+}
+
 export function buildCodexView(state) {
   const achievementIds = list(state.achievements?.unlocked);
   const endingIds = [...new Set([...list(state.codex?.endings), ...list(state.endings?.unlocked)])];

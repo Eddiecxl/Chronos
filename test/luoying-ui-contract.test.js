@@ -95,3 +95,24 @@ test('character presentation has a no-relationship empty state, 680px layout, an
   assert.match(css, /@media \(max-width: 680px\)/);
   assert.match(css, /\.doll-line/);
 });
+
+test('local panels retain their legacy map, relationship, equipment, quest, codex, and history paths', async () => {
+  const { script } = await readUi();
+  for (const name of ['renderLocalCharacterPanel', 'renderLocalQuestPanel', 'renderLocalInventoryPanel', 'renderLocalMapPanel', 'renderLocalCodexPanel', 'renderLocalHistoryPanel']) {
+    assert.match(script, new RegExp(`function ${name}`));
+  }
+  assert.match(script, /if \(state\.mode === 'local'\) return renderLocalMapPanel\(\)/);
+  assert.match(script, /for \(const \[name, location\] of Object\.entries\(LOCATIONS\)\)/);
+  assert.match(script, /getLocalPanelActions\(state, 'travel'\)/);
+});
+
+test('AI codex renders neutral empty categories and character quick scan includes gold and game day', async () => {
+  const { script } = await readUi();
+  assert.match(script, /尚未结识可辨认人物/);
+  assert.match(script, /尚未踏足可辨认地点/);
+  assert.match(script, /尚无已知物品/);
+  assert.match(script, /尚无已记录成就/);
+  assert.match(script, /尚无已知结局/);
+  assert.match(script, /attributeTile\('灵石', state\.player\.gold/);
+  assert.match(script, /attributeTile\('游戏日', `第 \$\{state\.story\.day\} 日/);
+});

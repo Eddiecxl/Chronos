@@ -1,6 +1,6 @@
 import { createGameState } from './game-state.js';
 import {
-  ITEMS, REALMS,
+  ACHIEVEMENTS, ENDINGS, ITEMS, LOCATIONS, NPCS, QUESTS, REALMS, TECHNIQUES,
   dispatchLocalChoice, getAvailableActions, getLocalPanelActions
 } from './game-engine.js';
 import { createStorage } from './storage.js';
@@ -498,7 +498,28 @@ async function saveAiEquipment(itemName) {
   }
 }
 
+function renderLocalCharacterPanel() {
+  const grid = node('div', 'panel-grid');
+  const realm = REALMS[state.player.realm];
+  grid.append(panelCard('道途', [
+    `${state.player.name} · ${realm.name}`,
+    `气血 ${state.player.hp}/${state.player.maxHp} · 灵气 ${state.player.qi}/${realm.need}`,
+    `灵力 ${state.player.spirit}/${state.player.maxSpirit} · 灵石 ${state.player.gold}`
+  ]));
+  grid.append(panelCard('攻守', [
+    `攻击 ${state.player.attack} · 防御 ${state.player.defense}`,
+    `武器 ${state.equipment.weapon || '无'} · 护甲 ${state.equipment.armor || '无'} · 配饰 ${state.equipment.accessory || '无'}`
+  ]));
+  grid.append(panelCard('所学功法', state.techniques.known.map((name) => {
+    const art = TECHNIQUES[name];
+    return art ? `《${name}》· 灵力 ${art.cost} · ${art.description}` : name;
+  }), 'wide'));
+  grid.append(panelCard('人物关系', Object.entries(state.relationships).map(([name, value]) => `${name} ${value >= 0 ? '+' : ''}${value}`), 'wide'));
+  dom.panelContent.append(grid);
+}
+
 function renderCharacterPanel() {
+  if (state.mode === 'local') return renderLocalCharacterPanel();
   const view = buildCharacterView(state);
   const sheet = node('div', 'character-sheet');
   const stats = node('aside', 'character-stats');
@@ -507,7 +528,12 @@ function renderCharacterPanel() {
   stats.append(vitalMeter('灵气', view.qi, view.qiNeed, 'qi'));
   stats.append(vitalMeter('法术灵力', view.spirit, view.maxSpirit, 'spirit'));
   const attributes = node('div', 'attribute-grid');
-  attributes.append(attributeTile('攻击', view.stats.attack, '本命与装备'), attributeTile('防御', view.stats.defense, '护体与装备'));
+  attributes.append(
+    attributeTile('攻击', view.stats.attack, '本命与装备'),
+    attributeTile('防御', view.stats.defense, '护体与装备'),
+    attributeTile('灵石', state.player.gold, '随身财货'),
+    attributeTile('游戏日', `第 ${state.story.day} 日`, state.story.period)
+  );
   stats.append(attributes);
   sheet.append(stats, paperDoll(view));
   dom.panelContent.append(sheet);
@@ -532,7 +558,25 @@ function renderCharacterPanel() {
   } else dom.panelContent.append(panelCard('人物关系', ['旅途尚未留下可辨认的人物记录。']));
 }
 
+function renderLocalQuestPanel() {
+  if (!state.quests.active.length) dom.panelContent.append(panelCard('暂无进行中任务', ['世界行动会继续牵动主线与支线。'], 'wide'));
+  for (const entry of state.quests.active) {
+    const quest = QUESTS[entry.id];
+    const card = node('section', 'quest-card');
+    card.append(node('h3', '', `${quest?.type === 'main' ? '主线' : '支线'} · ${quest?.title || entry.id}`));
+    card.append(node('p', '', quest?.description || ''));
+    card.append(node('p', '', `进度 ${entry.progress}/${entry.target}`));
+    const progress = node('div', 'progress');
+    const bar = node('i');
+    bar.style.width = `${Math.min(100, entry.progress / entry.target * 100)}%`;
+    progress.append(bar);
+    card.append(progress);
+    dom.panelContent.append(card);
+  }
+}
+
 function renderQuestPanel() {
+  if (state.mode === 'local') return renderLocalQuestPanel();
   const view = buildQuestView(state);
   const labels = { active: '进行中', completed: '已完成', failed: '已失败' };
   for (const [status, entries] of Object.entries(view)) {
@@ -579,38 +623,51 @@ function aiEquipmentAction(item) {
   return button;
 }
 
-function renderInventoryPanel() {
+function renderLocalInventoryPanel() {
   const grid = node('div', 'inventory-grid');
-  const actions = mode === 'local' ? getLocalPanelActions(state, 'inventory') : [];
+  const actions = getLocalPanelActions(state, 'inventory');
+  for (const [name, amount] of Object.entries(state.inventory.items).filter(([, count]) => count > 0)) {
+    const item = ITEMS[name];
+    const card = node('section', 'inventory-card');
+    const heading = node('header');
+    heading.append(node('h3', '', name), node('b', '', `×${amount}`));
+    card.append(heading, node('p', '', item?.description || '尚未录入图鉴。'));
+    const action = actions.find((candidate) => candidate.id.endsWith(`:${name}`));
+    if (action) card.append(actionButton(action));
+    grid.append(card);
+  }
+  if (!grid.childElementCount) grid.append(panelCard('背包为空', ['有些因果无法装进储物袋。']));
+  dom.panelContent.append(grid);
+  const recipes = getLocalPanelActions(state, 'alchemy');
+  const alchemy = panelCard('可炼丹方', recipes.length ? ['材料已齐，可以开炉。'] : ['回春丹：止血草×2、凝露花×1；聚气丹：凝露花×2、赤焰果×1。']);
+  for (const recipe of recipes) alchemy.append(actionButton(recipe));
+  dom.panelContent.append(alchemy);
+}
+
+function renderInventoryPanel() {
+  if (state.mode === 'local') return renderLocalInventoryPanel();
+  const grid = node('div', 'inventory-grid');
   for (const item of buildInventoryView(state)) {
     const { name, amount } = item;
     const card = node('section', 'inventory-card');
     const heading = node('header');
     heading.append(node('h3', '', name), node('b', '', `×${amount}`));
     card.append(heading, node('p', '', item.description));
-    const action = actions.find((candidate) => candidate.id.endsWith(`:${name}`));
-    if (action) card.append(actionButton(action));
     if (mode === 'ai' && ITEMS[name]?.slot) card.append(aiEquipmentAction(item));
     grid.append(card);
   }
   if (!grid.childElementCount) grid.append(panelCard('背包为空', ['有些因果无法装进储物袋。']));
   dom.panelContent.append(grid);
-  if (mode === 'local') {
-    const recipes = getLocalPanelActions(state, 'alchemy');
-    const alchemy = panelCard('可炼丹方', recipes.length ? ['材料已齐，可以开炉。'] : ['回春丹：止血草×2、凝露花×1；聚气丹：凝露花×2、赤焰果×1。']);
-    for (const recipe of recipes) alchemy.append(actionButton(recipe));
-    dom.panelContent.append(alchemy);
-  }
 }
 
-function renderMapPanel() {
+function renderLocalMapPanel() {
   const grid = node('div', 'map-grid');
-  const actions = mode === 'local' ? getLocalPanelActions(state, 'travel') : [];
-  for (const location of buildMapView(state)) {
-    const { name } = location;
-    const card = node('section', 'map-card');
-    card.append(node('h3', '', `${location.icon} ${name}${location.current ? ' · 当前' : ''}`));
-    card.append(node('p', '', location.description));
+  const actions = getLocalPanelActions(state, 'travel');
+  for (const [name, location] of Object.entries(LOCATIONS)) {
+    const unlocked = state.story.act >= location.act && state.player.realm >= location.realm;
+    const card = node('section', `map-card${unlocked ? '' : ' locked'}`);
+    card.append(node('h3', '', `${location.icon} ${name}${name === state.story.location ? ' · 当前' : ''}`));
+    card.append(node('p', '', unlocked ? location.description : `需要第 ${location.act} 幕、${REALMS[location.realm].name}`));
     const action = actions.find((candidate) => candidate.id === `travel:${name}`);
     if (action) card.append(actionButton(action));
     grid.append(card);
@@ -618,22 +675,70 @@ function renderMapPanel() {
   dom.panelContent.append(grid);
 }
 
-function renderCodexPanel() {
-  const view = buildCodexView(state);
-  const grid = node('div', 'codex-grid');
-  const sections = [
-    ['人物', view.characters.map((entry) => `${entry.name} · ${entry.role}`)],
-    ['地点', view.locations.map((entry) => entry.name)],
-    ['物品', view.items.map((entry) => `${entry.name} · ${entry.description}`)],
-    ['成就', view.achievements.map((entry) => `${entry.title} · ${entry.description}`)],
-    ['结局', view.endings.map((entry) => `${entry.title} · ${entry.description}`)]
-  ];
-  for (const [title, lines] of sections) if (lines.length) grid.append(panelCard(title, lines));
-  if (!grid.childElementCount) grid.append(panelCard('图鉴尚未落笔', ['亲历的人、地与物会在此留下记录。']));
+function renderMapPanel() {
+  if (state.mode === 'local') return renderLocalMapPanel();
+  const grid = node('div', 'map-grid');
+  for (const location of buildMapView(state)) {
+    const card = node('section', 'map-card');
+    card.append(node('h3', '', `${location.icon} ${location.name}${location.current ? ' · 当前' : ''}`));
+    card.append(node('p', '', location.description));
+    grid.append(card);
+  }
   dom.panelContent.append(grid);
 }
 
+function renderLocalCodexPanel() {
+  const grid = node('div', 'codex-grid');
+  grid.append(panelCard('人物', state.codex.characters.length ? state.codex.characters.map((name) => `${name} · ${NPCS[name]?.role || '旅途相逢'}`) : ['尚未结识']));
+  grid.append(panelCard('地点', state.codex.locations.length ? state.codex.locations : ['尚未踏足']));
+  grid.append(panelCard('物品', state.codex.items.length ? state.codex.items : ['尚无记录']));
+  grid.append(panelCard('成就', state.achievements.unlocked.length
+    ? state.achievements.unlocked.map((id) => ACHIEVEMENTS[id]?.title || id)
+    : [`0/${Object.keys(ACHIEVEMENTS).length} · 尚待落笔`]));
+  grid.append(panelCard('结局', state.endings.unlocked.length
+    ? state.endings.unlocked.map((id) => ENDINGS[id]?.title || id)
+    : ['五种结局仍藏在命数之后']), 'wide');
+  dom.panelContent.append(grid);
+}
+
+function renderCodexPanel() {
+  if (state.mode === 'local') return renderLocalCodexPanel();
+  const view = buildCodexView(state);
+  const grid = node('div', 'codex-grid');
+  const sections = [
+    ['人物', view.characters.length ? view.characters.map((entry) => `${entry.name} · ${entry.role}`) : ['尚未结识可辨认人物。']],
+    ['地点', view.locations.length ? view.locations.map((entry) => entry.name) : ['尚未踏足可辨认地点。']],
+    ['物品', view.items.length ? view.items.map((entry) => `${entry.name} · ${entry.description}`) : ['尚无已知物品。']],
+    ['成就', view.achievements.length ? view.achievements.map((entry) => `${entry.title} · ${entry.description}`) : ['尚无已记录成就。']],
+    ['结局', view.endings.length ? view.endings.map((entry) => `${entry.title} · ${entry.description}`) : ['尚无已知结局。']]
+  ];
+  for (const [title, lines] of sections) grid.append(panelCard(title, lines));
+  dom.panelContent.append(grid);
+}
+
+async function renderLocalHistoryPanel() {
+  const marker = node('p', 'modal-note', '正在翻阅完整命簿……');
+  dom.panelContent.append(marker);
+  const turns = await transcriptStore.allTurns(state.journeyId);
+  marker.remove();
+  const shown = turns.slice(-historyVisible);
+  if (!shown.length) return dom.panelContent.append(panelCard('尚无记录', ['成功的回合才会写进这里。失败的 AI 请求不会留下半句。']));
+  if (turns.length > historyVisible) {
+    const more = node('button', 'secondary-button small', `加载更早记录（尚有 ${turns.length - historyVisible} 回合）`);
+    more.addEventListener('click', () => { historyVisible += 30; renderPanel('history'); });
+    dom.panelContent.append(more);
+  }
+  for (const turn of shown) {
+    const card = node('section', 'panel-card wide');
+    card.append(node('h3', '', `${turn.kind === 'system' ? '时停问答' : '世界回合'} · ${turn.provider || '本地'}`));
+    if (turn.userText) card.append(node('p', '', `你：${turn.userText}`));
+    for (const block of turn.blocks || []) card.append(node('p', '', `${block.name ? `${block.name}：` : ''}${block.text}`));
+    dom.panelContent.append(card);
+  }
+}
+
 async function renderHistoryPanel() {
+  if (state.mode === 'local') return renderLocalHistoryPanel();
   const marker = node('p', 'modal-note', '正在翻阅完整命簿……');
   dom.panelContent.append(marker);
   const turns = await transcriptStore.allTurns(state.journeyId);
@@ -654,7 +759,7 @@ async function renderHistoryPanel() {
   }
   for (const turn of shown) {
     const card = node('section', 'panel-card wide');
-    card.append(node('h3', '', `${turn.kind === 'system' ? '时停问答' : '世界回合'} · ${turn.provider || (mode === 'local' ? '本地' : 'AI')}`));
+    card.append(node('h3', '', `${turn.kind === 'system' ? '时停问答' : '世界回合'} · ${turn.provider || 'AI'}`));
     if (turn.userText) card.append(node('p', '', `你：${turn.userText}`));
     for (const block of turn.blocks || []) card.append(node('p', '', `${block.name ? `${block.name}：` : ''}${block.text}`));
     dom.panelContent.append(card);

@@ -5,6 +5,7 @@ import {
   buildCharacterView,
   buildCodexView,
   buildInventoryView,
+  buildLocalMapView,
   buildMapView,
   buildQuestView
 } from '../public/luoying-xiantu/panel-view.js';
@@ -21,6 +22,19 @@ test('new AI panel views expose current knowledge but no future catalog', () => 
   assert.deepEqual(codex.characters, []);
   assert.equal(JSON.stringify({ character, map, codex }).includes('飞升台'), false);
   assert.equal(JSON.stringify(codex).includes('/5'), false);
+});
+
+test('local map retains unlocked travel rows that are not in the progressive codex', () => {
+  const state = createGameState('本地照月', 'local', () => 'local-map');
+  state.story.act = 2;
+  state.player.realm = 4;
+  state.codex.locations = [state.story.location];
+
+  const rows = buildLocalMapView(state);
+  const market = rows.find((entry) => entry.name === '百宝坊市');
+
+  assert.equal(market.unlocked, true);
+  assert.equal(state.codex.locations.includes('百宝坊市'), false);
 });
 
 test('quest view retains completed work and reveals no future quest', () => {
