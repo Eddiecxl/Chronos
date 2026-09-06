@@ -9,6 +9,7 @@ import {
 import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, storyVisibleTextFor } from './discovery.js';
 import { answerSystemQuery } from './turn-router.js';
 import { LOCATIONS } from './game-data.js';
+import { throwIfCancelled } from './ai-policy.js';
 
 const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一叙事作者。本回合绝不能使用本地预写剧情作后备。
 规则：
@@ -22,6 +23,7 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 8. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总，其键优先使用 actors 中的精确 id（兼容 name），不得自创 actor: 前缀。NPC 可在 dlg 对白中用“你”称呼我。
 9. 任务只允许按场景契约 activeQuests 操作：questProgress 只能推进本回合开始前已接取任务，completeQuests 必须同回合推进至 target，failQuests 只能失败已接取任务；addQuests 不得与推进、完成或失败同回合发生。
 10. 提交章节出口时，effects 必须包含一个合法且具体的地点或任务效果目标；玩家本回合原话必须明确肯定并写出同一个目标。仅有出口标记、空 effects、含糊“继续观察”或拒绝目标都不得跳章。chapter.exits 的 targetLocation 是可用于出口的合法目的地。
+11. 每次聚焦一个有因果的场面，不跳过谈判、追查或关键行动。NPC 的措辞、迟疑和小动作体现各自目的，不用旁白替他们解释全部。反转必须承接已见线索和动机，不能每回合凭空出现敌人。旧悬念要有兑现，推进以新证据、选择的代价或关系变化自然发生；没有玩家决定不得跨章。记忆只记正文已出现的事实，object 尽量逐字摘取正文，既有事实不重复写入。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
 {"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"timeCost":"instant|brief|scene|long"}`;
 
@@ -29,7 +31,7 @@ const cleanText = (value, max = 2_000) => String(value ?? '').replace(/[\u0000-\
 const defaultId = () => globalThis.crypto?.randomUUID?.() || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 function recentForPrompt(turns) {
-  return turns.slice(-6).map((turn) => ({
+  return turns.filter((turn) => turn.kind !== 'system').slice(-4).map((turn) => ({
     id: cleanText(turn.id, 100),
     kind: turn.kind,
     userText: cleanText(turn.userText, 300),
@@ -47,12 +49,13 @@ function compactContract(contract) {
     playerInput: contract.playerInput,
     chapter: contract.chapter,
     sceneGoal: contract.sceneGoal,
+    time: contract.time,
     location: contract.location,
     actors: contract.actors.slice(0, 8).map((actor) => ({
       id: actor.id, name: actor.name, status: actor.status, location: actor.location,
       purpose: actor.purpose, knownFactIds: actor.knownFactIds.slice(0, 12)
     })),
-    facts: contract.facts.slice(-12),
+    facts: contract.facts.filter((fact) => contract.actors.some((actor) => actor.knownFactIds.includes(fact.id))).slice(-16),
     dangerClocks: contract.dangerClocks,
     openLoopIds: contract.openLoopIds.slice(-12),
     legalItemIds: contract.legalItemIds,
@@ -73,16 +76,19 @@ function buildWorldMessages(contract, memoryPacket, recentTurns, requestType) {
   const openingRule = requestType === 'opening'
     ? '这是开篇：所有可见剧情文字都必须由你生成。以“我”从昏沉中恢复感知写起，让我察觉迫近危险，但停在第一个需要由我决定的行动前。progress.advanced 必须至少包含精确值 "opening:awakened"。'
     : '这是普通世界行动：逐字尊重场景契约内的 playerInput，并让它产生真实后果。';
-  return [
-    {
-      role: 'system',
-      content: cleanText(`${WORLD_BIBLE}\n${openingRule}\n场景契约：${JSON.stringify(compactContract(contract))}\n相关长期记忆：${JSON.stringify(memoryPacket)}`, 5_800)
-    },
-    {
-      role: 'user',
-      content: cleanText(`本次玩家原话：${contract.playerInput}\n最近六个回合：${JSON.stringify(recentForPrompt(recentTurns))}\n严格输出一个 JSON 对象。`, 5_800)
-    }
+  const { actors, facts, playerInput, ...core } = compactContract(contract);
+  const recent = recentForPrompt(recentTurns);
+  while (JSON.stringify(recent).length > 3500 && recent.length > 1) recent.shift();
+  // Keep JSON sections complete: substring truncation used to cut off memory and rules mid-object.
+  const messages = [
+    { role: 'system', content: `${WORLD_BIBLE}\n${openingRule}` },
+    { role: 'system', content: `场景契约：${JSON.stringify(core)}` },
+    { role: 'system', content: `在场人物及其可引用事实：${JSON.stringify({ actors, facts })}` },
+    { role: 'system', content: `相关长期记忆：${JSON.stringify(memoryPacket)}` },
+    { role: 'user', content: `最近世界回合：${JSON.stringify(recent)}\n本次玩家原话：${playerInput}\n写出一个完整的当下场面，旁白约260–500字，遵守当前时段，不提前替我选下一步。${requestType === 'opening' ? '开篇的 progress.advanced 必须为 ["opening:awakened"]。' : 'progress.advanced 至少一个以 discovery:、scene:、quest: 或 danger: 开头的字符串；progress.consequences 至少一个本次行动实际造成的后果；memory.facts 记录1–3条正文中逐字可见的新证据，object 直接摘抄正文。'}无变化字段用空对象或空数组。只输出严格 JSON，使用英文键名 blocks、effects、progress、memory、timeCost，不可翻译键名。` }
   ];
+  if (messages.some((message) => message.content.length > 5800)) throw new Error('本回合上下文过大，请缩短输入后重试。');
+  return messages;
 }
 
 function narrationFrom(raw, requestType) {
@@ -111,12 +117,13 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
   if (!transcriptStore?.recentTurns || !transcriptStore?.appendTurn) throw new Error('游戏记录存储不可用。');
   if (stateStore && !stateStore.saveAuto) throw new Error('AI 原子存档组件不可用。');
 
-  async function executeWorld({ state: source, input, settings = {}, transactionId }, requestType) {
+  async function executeWorld({ state: source, input, settings = {}, transactionId, signal, onProgress = () => {} }, requestType) {
     let contract;
     let failureState = source;
     const cleanInput = cleanText(input, 2_000);
     const txId = cleanText(transactionId || idFactory(), 100);
     try {
+      throwIfCancelled(signal);
       let state = migrateGameState(source, 'ai');
       if (state.transactionJournal) {
         if (!stateStore?.recoverPendingTurn) throw new Error('上一回合仍待恢复，请重新读取自动存档。');
@@ -137,10 +144,14 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       let validation;
       let raw = '';
 
-      const maxAttempts = 3;
+      const maxAttempts = 2;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        throwIfCancelled(signal);
+        onProgress(attempt ? 'repair' : 'generating', attempt ? { errors: validation?.errors, candidate: narration } : {});
         const proxyRequestType = attempt > 0 ? 'repair' : requestType === 'opening' ? 'world' : requestType;
-        raw = await aiClient.narrate(settings, { requestType: proxyRequestType, transactionId: txId, messages });
+        raw = await aiClient.narrate(settings, { requestType: proxyRequestType, transactionId: txId, messages, signal });
+        throwIfCancelled(signal);
+        onProgress('validating');
         try {
           narration = narrationFrom(raw, requestType);
           validation = validateAiWorldTurn(state, contract, narration, recentTurns);
@@ -149,15 +160,16 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           validation = { ok: false, errors: [error.message], fingerprint: '' };
         }
         if (validation.ok) break;
-        if (attempt < 2) {
+        if (attempt < maxAttempts - 1) {
           messages = [
             ...messages,
-            { role: 'assistant', content: cleanText(raw, 5_800) },
             ...buildRepairMessages(contract, narration, validation.errors)
           ];
         }
       }
       if (!validation?.ok) throw new Error(`AI 内容连续 ${maxAttempts} 次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
+      throwIfCancelled(signal);
+      onProgress('saving');
 
       let committed = commitValidatedWorldTurn(state, contract, narration);
       const visibleText = storyVisibleTextFor(narration);
@@ -242,27 +254,28 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
   }
 
   return {
-    async runOpening({ state, settings = {}, transactionId } = {}) {
+    async runOpening({ state, settings = {}, transactionId, signal, onProgress } = {}) {
       return executeWorld({
         state,
         input: '生成旅程开篇：主角刚在赵府柴房醒来，等待玩家作出第一个行动。',
         settings,
-        transactionId
+        transactionId, signal, onProgress
       }, 'opening');
     },
-    async runWorld({ state, input, settings = {}, transactionId } = {}) {
+    async runWorld({ state, input, settings = {}, transactionId, signal, onProgress } = {}) {
       if (!cleanText(input)) return failure('请输入行动。', '', cleanText(transactionId || idFactory(), 100), undefined);
-      return executeWorld({ state, input, settings, transactionId }, 'world');
+      return executeWorld({ state, input, settings, transactionId, signal, onProgress }, 'world');
     },
-    async runSystem({ state, input, settings = {}, transactionId } = {}) {
+    async runSystem({ state, input, settings = {}, transactionId, signal } = {}) {
       const txId = cleanText(transactionId || idFactory(), 100);
       const cleanInput = cleanText(input, 2_000);
       try {
+        throwIfCancelled(signal);
         migrateGameState(state, state.mode);
         let answer = answerSystemQuery(state, cleanInput);
         if (!answer.handled) {
           const raw = await aiClient.narrate(settings, {
-            requestType: 'system', transactionId: txId,
+            requestType: 'system', transactionId: txId, signal,
             messages: [
               { role: 'system', content: '时间完全暂停。只回答玩家关于既有状态的问题；只输出 {"blocks":[{"type":"sys","text":"答复"}]}，不得输出任何效果、剧情行动或 NPC 推进。' },
               { role: 'user', content: cleanInput }
@@ -275,6 +288,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           provider: settings.provider || 'system', model: settings.model || '',
           blocks: answer.blocks, createdAt: new Date(now()).toISOString()
         };
+        throwIfCancelled(signal);
         await transcriptStore.appendTurn(state.journeyId, turn);
         return { ok: true, state, blocks: answer.blocks, turn };
       } catch (error) {

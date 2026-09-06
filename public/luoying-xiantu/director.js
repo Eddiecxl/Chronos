@@ -285,6 +285,7 @@ export function createSceneContract(source, input, turnId) {
       prerequisites
     },
     sceneGoal: state.director.sceneGoal || chapter.goal,
+    time: { day: state.story.day, period: state.story.period, minuteOfDay: state.story.minuteOfDay },
     location: { id: LOCATIONS[state.story.location]?.id || 'location:unknown', name: state.story.location },
     actors,
     facts,
@@ -315,6 +316,7 @@ export function createSceneContract(source, input, turnId) {
     idleLimit: 2,
     consecutiveIdleTurns: state.director.consecutiveIdleTurns,
     player: {
+      name: state.player.name,
       realm: contractPlayer.realm, hp: contractPlayer.hp, maxHp: contractPlayer.maxHp,
       qi: contractPlayer.qi, spirit: contractPlayer.spirit, maxSpirit: contractPlayer.maxSpirit,
       gold: contractPlayer.gold, attack: contractPlayer.attack, defense: contractPlayer.defense

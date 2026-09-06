@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#fff3f6">
+  <meta name="game-release" content="2026-09-07-performance">
   <meta name="description" content="落樱仙途：本地选择与纯 AI 双版本修仙文字游戏。">
   <title>落樱仙途 · 此世由你落笔</title>
   <link rel="stylesheet" href="./styles.css">
@@ -89,9 +90,12 @@
     </header>
 
     <section class="story-shell">
+      <section class="scene-stage" id="sceneStage" aria-label="我与当前地点">
+        <button class="motion-toggle" id="motionToggle" type="button" aria-pressed="false">动态：开</button>
+      </section>
       <div class="act-ribbon"><span id="actLabel">第一幕 · 尘缘初醒</span><i></i><small id="dayLabel">第 1 日 · 清晨</small><strong class="pause-badge" id="pauseBadge" hidden>⏸ 时停中</strong></div>
       <div class="story-log" id="storyLog" role="log" aria-live="polite" aria-label="游戏剧情"></div>
-      <div class="pending-indicator" id="pendingIndicator" hidden><i></i><i></i><i></i><span>命数推演中</span></div>
+      <div class="pending-indicator" id="pendingIndicator" hidden role="status"><i></i><span id="pendingText">命数推演中</span><button id="cancelAiButton" type="button">停止等待</button></div>
 
       <section class="retry-panel" id="retryPanel" hidden aria-live="polite">
         <h2>这次命数没有落笔</h2>

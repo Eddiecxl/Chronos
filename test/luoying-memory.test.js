@@ -124,3 +124,11 @@ test('chapter summaries are sanitized without replacing facts', () => {
   assert.ok(next.memory.chapterSummaries['act1-awakening'].length <= 1200);
   assert.doesNotMatch(next.memory.chapterSummaries['act1-awakening'], /[<>]/);
 });
+
+test('committed world clues remain retrievable after they leave recent dialogue', () => {
+  const state = createGameState('照月', 'ai');
+  state.memory.facts.push({ id: 'fact:window', subjectId: 'world:escape', predicate: 'observed',
+    object: '后窗的旧插销已经松动', sourceTurnId: 'turn-1', createdAtTurn: 1, locked: false });
+  const packet = selectRelevantMemory(state, { locationId: 'location:zhao-woodshed' });
+  assert.ok(packet.facts.some(f => f.id === 'fact:window'));
+});

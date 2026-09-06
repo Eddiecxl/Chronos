@@ -101,12 +101,20 @@ const geocodeMalaysia = async (location) => {
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', storage: process.env.MONGODB_URI ? 'mongodb' : 'local', timeZone: 'Asia/Kuala_Lumpur' }));
 app.post('/api/users', requireAuth, async (req, res) => { await recordUser(req.auth.username); res.status(201).json({ username: req.auth.username }); });
 app.post('/api/game/ai', requireAuth, async (req, res, next) => {
+  const controller = new AbortController();
+  const onClose = () => { if (!res.writableEnded) controller.abort(); };
+  res.on('close', onClose);
   try {
-    const result = await gameAi.generate(req.auth.usernameKey, validateGameAiBody(req.body));
+    const result = await gameAi.generate(req.auth.usernameKey, validateGameAiBody(req.body), { signal: controller.signal });
+    res.set('Server-Timing', `ai;dur=${result.latencyMs}`);
     res.json(result);
   } catch (error) {
-    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code });
+    if (controller.signal.aborted) return;
+    if (error.retryAfterMs) res.set('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)));
+    if (error.status) return res.status(error.status).json({ error: error.message, code: error.code, retryAfterMs: error.retryAfterMs });
     next(error);
+  } finally {
+    res.off('close', onClose);
   }
 });
 

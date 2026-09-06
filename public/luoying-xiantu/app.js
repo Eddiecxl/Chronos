@@ -7,6 +7,7 @@ import { createStorage } from './storage.js';
 import { createTranscriptStore } from './transcript-store.js';
 import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
 import { createAiTurnRunner } from './ai-turn.js';
+import { createHeroArt, createScenePresentation } from './scene-art.js';
 import { classifyTurn } from './turn-router.js';
 import {
   derivedPlayerStats, EQUIPMENT_SLOT_ORDER, commitAiEquipmentForActiveJourney, restoreAiEquipmentState
@@ -42,6 +43,7 @@ const storage = createStorage();
 const transcriptStore = createTranscriptStore();
 const aiClient = createAiClient();
 const aiRunner = createAiTurnRunner({ aiClient, transcriptStore, stateStore: storage });
+const updateScene = createScenePresentation(byId('sceneStage'));
 
 let state = null;
 let mode = null;
@@ -54,6 +56,22 @@ let retryContext = null;
 let aiSettings = aiClient.loadSettings();
 let runtimeKey = '';
 let toastTimer;
+let activeRequest = null;
+let storyFrame = 0;
+let motionOff = false;
+try { motionOff = localStorage.getItem('luoying-reduce-motion') === 'true'; } catch {}
+function syncMotion() {
+  document.body.classList.toggle('reduce-motion', motionOff);
+  byId('motionToggle').textContent = `动态：${motionOff ? '关' : '开'}`;
+  byId('motionToggle').setAttribute('aria-pressed', String(motionOff));
+}
+syncMotion();
+byId('motionToggle').addEventListener('click', () => {
+  motionOff = !motionOff; syncMotion();
+  try { localStorage.setItem('luoying-reduce-motion', String(motionOff)); } catch {}
+});
+byId('cancelAiButton').addEventListener('click', () => activeRequest?.controller.abort());
+document.addEventListener('visibilitychange', () => document.body.classList.toggle('page-inactive', document.hidden));
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -95,7 +113,9 @@ function appendStoryBlock(block) {
   text.textContent = String(block?.text || '');
   article.append(text);
   dom.storyLog.append(article);
-  requestAnimationFrame(() => dom.storyLog.scrollTo({ top: dom.storyLog.scrollHeight, behavior: 'smooth' }));
+  while (dom.storyLog.children.length > 160) dom.storyLog.firstElementChild.remove();
+  cancelAnimationFrame(storyFrame);
+  storyFrame = requestAnimationFrame(() => dom.storyLog.scrollTo({ top: dom.storyLog.scrollHeight, behavior: 'auto' }));
 }
 
 function appendTurnToStory(turn) {
@@ -105,7 +125,12 @@ function appendTurnToStory(turn) {
 
 async function renderTranscript() {
   dom.storyLog.replaceChildren();
-  const turns = await transcriptStore.allTurns(state.journeyId);
+  const turns = await transcriptStore.recentTurns(state.journeyId, 24);
+  if (turns.length === 24) {
+    const earlier = node('button', 'earlier-history', '更早的经历 · 打开完整历史');
+    earlier.addEventListener('click', () => openPanel('history'));
+    dom.storyLog.append(earlier);
+  }
   for (const turn of turns) appendTurnToStory(turn);
   return turns;
 }
@@ -114,10 +139,12 @@ function updatePauseBadge() {
   const modalOpen = !dom.panelLayer.hidden || !dom.saveLayer.hidden || !dom.aiLayer.hidden;
   const paused = modalOpen || (mode === 'ai' && channel === 'system');
   dom.pauseBadge.hidden = !paused;
+  document.body.classList.toggle('world-paused', paused);
 }
 
 function renderTopbar() {
   if (!state) return;
+  updateScene(state);
   const realm = REALMS[state.player.realm] || REALMS[0];
   const derived = derivedPlayerStats(state);
   dom.statusName.textContent = state.player.name;
@@ -140,7 +167,8 @@ function setPending(value) {
   pending = value;
   dom.pendingIndicator.hidden = !value;
   dom.sendButton.disabled = value;
-  dom.playerInput.disabled = value;
+  // Keep typing responsive while the previous action is being resolved.
+  dom.playerInput.disabled = false;
   for (const button of dom.localActions.querySelectorAll('button')) button.disabled = value;
   syncEquipmentControls();
 }
@@ -245,13 +273,38 @@ function currentAiSettings() {
   return { ...aiSettings, key: runtimeKey };
 }
 
+async function requestTurn(kind, input, transactionId) {
+  const controller = new AbortController();
+  const startedAt = performance.now();
+  const request = { controller, stage: 'generating' };
+  activeRequest = request;
+  setPending(true);
+  const labels = { generating: '命数推演中', repair: '正在校准剧情', validating: '正在核对此世因果', saving: '正在保存旅程' };
+  const refresh = () => {
+    if (activeRequest !== request) return;
+    const seconds = Math.floor((performance.now() - startedAt) / 1000);
+    byId('pendingText').textContent = `${labels[request.stage]} · ${seconds} 秒${seconds >= 12 ? ' · 模型响应较慢' : ''}`;
+    byId('cancelAiButton').disabled = request.stage === 'saving';
+  };
+  refresh();
+  const ticker = setInterval(refresh, 1000);
+  const deadline = setTimeout(() => controller.abort(new DOMException('Turn deadline', 'TimeoutError')), 45_000);
+  try {
+    return await aiRunner[kind]({ state, input, transactionId, settings: currentAiSettings(), signal: controller.signal,
+      onProgress: (stage) => { request.stage = stage; refresh(); } });
+  } catch (error) {
+    return { ok: false, error: error.message, retry: { input, transactionId } };
+  } finally {
+    clearInterval(ticker); clearTimeout(deadline);
+    if (activeRequest === request) { activeRequest = null; setPending(false); }
+  }
+}
+
 async function runAiOpening(transactionId) {
   if (pending || mode !== 'ai') return;
   const journeyId = state.journeyId;
   clearRetry();
-  setPending(true);
-  const result = await aiRunner.runOpening({ state, settings: currentAiSettings(), transactionId });
-  setPending(false);
+  const result = await requestTurn('runOpening', undefined, transactionId);
   if (dom.game.hidden || mode !== 'ai' || state?.journeyId !== journeyId) return;
   if (!result.ok) {
     showRetry(result, 'opening');
@@ -266,9 +319,7 @@ async function runAiWorld(input, transactionId) {
   if (pending || mode !== 'ai') return;
   const journeyId = state.journeyId;
   clearRetry();
-  setPending(true);
-  const result = await aiRunner.runWorld({ state, input, settings: currentAiSettings(), transactionId });
-  setPending(false);
+  const result = await requestTurn('runWorld', input, transactionId);
   if (dom.game.hidden || mode !== 'ai' || state?.journeyId !== journeyId) return;
   if (!result.ok) {
     showRetry(result, 'world');
@@ -277,7 +328,7 @@ async function runAiWorld(input, transactionId) {
   state = result.state;
   appendStoryBlock({ type: 'player', text: input });
   for (const block of result.blocks) appendStoryBlock(block);
-  dom.playerInput.value = '';
+  if (dom.playerInput.value.trim() === input) dom.playerInput.value = '';
   resizeComposer();
   renderTopbar();
 }
@@ -286,9 +337,7 @@ async function runAiSystem(input) {
   if (pending || mode !== 'ai') return;
   const journeyId = state.journeyId;
   clearRetry();
-  setPending(true);
-  const result = await aiRunner.runSystem({ state, input, settings: currentAiSettings() });
-  setPending(false);
+  const result = await requestTurn('runSystem', input);
   if (dom.game.hidden || mode !== 'ai' || state?.journeyId !== journeyId) return;
   if (!result.ok) {
     showRetry(result, 'system');
@@ -296,7 +345,7 @@ async function runAiSystem(input) {
   }
   appendStoryBlock({ type: 'player', text: input });
   for (const block of result.blocks) appendStoryBlock(block);
-  dom.playerInput.value = '';
+  if (dom.playerInput.value.trim() === input) dom.playerInput.value = '';
   resizeComposer();
 }
 
@@ -320,6 +369,7 @@ async function ensureLocalOpening() {
 }
 
 async function enterGame(nextState, { skipOpening = false } = {}) {
+  activeRequest?.controller.abort();
   state = nextState.mode === 'ai'
     ? await storage.recoverPendingTurn('ai', nextState, transcriptStore)
     : nextState;
@@ -364,6 +414,9 @@ function closeAllLayers() {
 }
 
 function renderTitle() {
+  activeRequest?.controller.abort();
+  activeRequest = null;
+  setPending(false);
   closeAllLayers();
   dom.game.hidden = true;
   dom.cover.hidden = false;
@@ -458,16 +511,7 @@ function paperDoll(view) {
     connector.setAttribute('d', d);
     silhouette.append(connector);
   }
-  const shapes = [
-    ['circle', { cx: '110', cy: '58', r: '35' }], ['path', { d: 'M78 104 Q110 86 142 104 L164 215 L137 238 L138 371 L82 371 L83 238 L56 215Z' }],
-    ['path', { d: 'M83 130 L37 230 L61 242 L100 171Z' }], ['path', { d: 'M137 130 L183 230 L159 242 L120 171Z' }],
-    ['path', { d: 'M83 367 L70 412 L100 412 L108 367Z' }], ['path', { d: 'M137 367 L150 412 L120 412 L112 367Z' }]
-  ];
-  for (const [tag, attributes] of shapes) {
-    const shape = document.createElementNS('http://www.w3.org/2000/svg', tag);
-    for (const [name, value] of Object.entries(attributes)) shape.setAttribute(name, value);
-    silhouette.append(shape);
-  }
+  silhouette.append(...createHeroArt().children);
   doll.append(silhouette);
   for (const slot of EQUIPMENT_SLOT_ORDER) doll.append(equipmentSlot(view, slot));
   return doll;
@@ -873,7 +917,8 @@ function syncAiFields(resetModel = false) {
   dom.credentialSelect.querySelector('option[value="site"]').disabled = !siteCapable;
   dom.credentialField.hidden = none;
   dom.keyField.hidden = none || dom.credentialSelect.value !== 'personal';
-  dom.baseField.hidden = id !== 'custom';
+  dom.baseField.hidden = false;
+  dom.baseUrlInput.readOnly = id !== 'custom';
   if (resetModel) dom.modelInput.value = provider.model;
   dom.modelOptions.replaceChildren(...modelsForProvider(id).map((model) => {
     const option = document.createElement('option');
@@ -885,8 +930,8 @@ function syncAiFields(resetModel = false) {
   dom.modelInput.title = siteMode
     ? `网站模式可切换允许的模型：${(provider.models || [provider.model]).join('、')}`
     : '';
-  dom.baseUrlInput.value = provider.baseUrl || '';
-  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式可切换允许的模型，默认值由部署配置决定。' : ''}`;
+  dom.baseUrlInput.value = id === 'custom' ? (resetModel ? '' : aiSettings.baseUrl || dom.baseUrlInput.value) : provider.baseUrl || '';
+  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式可切换允许的模型。' : ' 官方地址已填好，只需填写 Key 和模型。'}${id === 'groq' ? ' 120B 偏重细节；20B 适合极速测试。' : id === 'gemini' ? ' 使用 Google 原生接口，模型路径由游戏自动补全。' : ''}`;
 }
 
 function openAiDialog() {

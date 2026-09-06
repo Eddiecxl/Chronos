@@ -105,7 +105,7 @@ test('an AI failure leaves the complete world byte-for-byte unchanged', async ()
   assert.equal(result.retry.input, '推开石门');
 });
 
-test('invalid narration receives two repair calls then rolls back', async () => {
+test('invalid narration receives one repair call then rolls back', async () => {
   let calls = 0;
   const requestTypes = [];
   const state = seededAiState();
@@ -115,8 +115,8 @@ test('invalid narration receives two repair calls then rolls back', async () => 
   const before = JSON.stringify(state);
   const runner = runnerWithNarrator(async (_settings, context) => { calls += 1; requestTypes.push(context.requestType); return noProgressResponse(); });
   const result = await runner.runWorld({ state, input: '继续', settings: { provider: 'groq' } });
-  assert.equal(calls, 3);
-  assert.deepEqual(requestTypes, ['world', 'repair', 'repair']);
+  assert.equal(calls, 2);
+  assert.deepEqual(requestTypes, ['world', 'repair']);
   assert.equal(result.ok, false);
   assert.equal(JSON.stringify(state), before);
   assert.equal(result.state.director.chapterTurns, 6);
@@ -133,7 +133,7 @@ test('one repair attempt can turn an invalid response into a committed world tur
   assert.equal(result.state.player.qi, 8);
 });
 
-test('a second repair attempt can recover a stubborn malformed model response', async () => {
+test('a stubborn malformed response returns control instead of a third generation', async () => {
   let calls = 0;
   const requestTypes = [];
   const runner = runnerWithNarrator(async (_settings, context) => {
@@ -142,9 +142,9 @@ test('a second repair attempt can recover a stubborn malformed model response', 
     return calls < 3 ? noProgressResponse() : validWorldResponse();
   });
   const result = await runner.runWorld({ state: seededAiState(), input: '查看门缝', settings: { provider: 'groq' } });
-  assert.equal(result.ok, true);
-  assert.equal(calls, 3);
-  assert.deepEqual(requestTypes, ['world', 'repair', 'repair']);
+  assert.equal(result.ok, false);
+  assert.equal(calls, 2);
+  assert.deepEqual(requestTypes, ['world', 'repair']);
 });
 
 test('a paused AI answer cannot commit effects or time', async () => {

@@ -137,7 +137,7 @@ test('transient upstream responses receive exactly one retry', async () => {
   assert.equal(calls, 2);
 });
 
-test('site proxy honors the upstream retry-after delay before retrying a rate limit', async () => {
+test('site proxy reports the upstream retry-after window without silently waiting', async () => {
   let calls = 0;
   const waits = [];
   const service = createGameAiService({
@@ -147,11 +147,12 @@ test('site proxy honors the upstream retry-after delay before retrying a rate li
       ? jsonResponse({ error: { message: 'Please try again in 6.25s' } }, 429, { 'retry-after': '6.25' })
       : jsonResponse({ choices: [{ message: { content: '恢复' } }] }))
   });
-  assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
-  assert.deepEqual(waits, [6250]);
+  await assert.rejects(service.generate('player', validRequest('groq')), error => error.retryAfterMs === 6250);
+  assert.deepEqual(waits, []);
+  assert.equal(calls, 1);
 });
 
-test('site proxy can follow two rolling rate-limit windows before succeeding', async () => {
+test('site quota exhaustion does not consume extra requests in a retry loop', async () => {
   let calls = 0;
   const waits = [];
   const service = createGameAiService({
@@ -164,8 +165,9 @@ test('site proxy can follow two rolling rate-limit windows before succeeding', a
       return jsonResponse({ choices: [{ message: { content: '恢复' } }] });
     }
   });
-  assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
-  assert.deepEqual(waits, [3000, 1250]);
+  await assert.rejects(service.generate('player', validRequest('groq')), error => error.code === 'AI_RATE_LIMITED');
+  assert.deepEqual(waits, []);
+  assert.equal(calls, 1);
 });
 
 test('upstream timeout remains active while the response body is being read', async () => {

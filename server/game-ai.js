@@ -1,3 +1,5 @@
+import { generationOptions } from '../public/luoying-xiantu/ai-policy.js';
+
 const PROVIDER_CONFIG = {
   groq: {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
@@ -23,7 +25,7 @@ const PROVIDER_CONFIG = {
 };
 
 const REQUEST_TYPES = new Set(['world', 'system', 'repair', 'trial']);
-const TRANSIENT_STATUSES = new Set([429, 502, 503]);
+const TRANSIENT_STATUSES = new Set([502, 503]);
 const ROLES = new Set(['system', 'user', 'assistant']);
 const MINUTE_LIMIT = 12;
 const DAY_LIMIT = 240;
@@ -86,14 +88,13 @@ function rateLimiter(now) {
   };
 }
 
-function openAiBody(model, messages, jsonMode = false) {
+function openAiBody(model, messages, provider, requestType) {
   return {
-    model, messages, temperature: 0.85, max_tokens: 1_800,
-    ...(jsonMode ? { response_format: { type: 'json_object' } } : {})
+    model, messages, ...generationOptions(provider, model, requestType)
   };
 }
 
-function geminiBody(messages) {
+function geminiBody(messages, model, requestType) {
   const systemText = messages.filter((message) => message.role === 'system').map((message) => message.content).join('\n');
   const contents = messages.filter((message) => message.role !== 'system').map((message) => ({
     role: message.role === 'assistant' ? 'model' : 'user',
@@ -102,7 +103,7 @@ function geminiBody(messages) {
   return {
     ...(systemText ? { systemInstruction: { parts: [{ text: systemText }] } } : {}),
     contents,
-    generationConfig: { temperature: 0.85, responseMimeType: 'application/json' }
+    generationConfig: generationOptions('gemini', model, requestType)
   };
 }
 
@@ -134,13 +135,13 @@ function retryWaitMs(response, data, fallback = 900) {
 }
 
 export function createGameAiService({
-  fetchImpl = globalThis.fetch, env = process.env, now = () => Date.now(), timeoutMs = 45_000, sleep = delay
+  fetchImpl = globalThis.fetch, env = globalThis.process?.env || {}, now = () => Date.now(), timeoutMs = 25_000, sleep = delay
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('fetch implementation is required');
   const takeRateSlot = rateLimiter(now);
 
   return {
-    async generate(accountKey, input) {
+    async generate(accountKey, input, { signal } = {}) {
       const request = validateGameAiBody(input);
       takeRateSlot(accountKey);
       const config = PROVIDER_CONFIG[request.provider];
@@ -155,23 +156,35 @@ export function createGameAiService({
         ? `${config.endpoint}/${encodeURIComponent(model)}:generateContent`
         : config.endpoint;
       const body = config.protocol === 'gemini'
-        ? geminiBody(request.messages)
-        : openAiBody(model, request.messages, request.provider === 'groq');
+        ? geminiBody(request.messages, model, request.requestType)
+        : openAiBody(model, request.messages, request.provider, request.requestType);
       const headers = {
         'Content-Type': 'application/json',
         ...(config.protocol === 'gemini' ? { 'x-goog-api-key': key } : { Authorization: `Bearer ${key}` })
       };
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const startedAt = now();
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener('abort', abort, { once: true });
+      if (signal?.aborted) abort();
+      const timer = setTimeout(abort, timeoutMs);
+      try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
+          if (controller.signal.aborted) throw new GameAiError('AI 请求超时或已取消。', 'AI_TIMEOUT', 504);
           const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 2) throw upstreamError(response.status);
-            clearTimeout(timer);
-            await sleep(retryWaitMs(response, errorData));
+            if (response.status === 429) {
+              const error = upstreamError(429);
+              error.retryAfterMs = retryWaitMs(response, errorData);
+              throw error;
+            }
+            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw upstreamError(response.status);
+            const waitMs = retryWaitMs(response, errorData, 500);
+            if (waitMs > 1500 || now() - startedAt + waitMs >= timeoutMs) throw upstreamError(response.status);
+            await sleep(waitMs);
             continue;
           }
           let data;
@@ -184,17 +197,20 @@ export function createGameAiService({
             text: extractText(request.provider, data),
             provider: request.provider,
             model,
-            transactionId: request.transactionId
+            transactionId: request.transactionId,
+            latencyMs: Math.max(0, now() - startedAt), attempts: attempt + 1
           };
         } catch (error) {
           if (error instanceof GameAiError) throw error;
           if (error?.name === 'AbortError' || controller.signal.aborted) throw new GameAiError('AI 请求超时。', 'AI_TIMEOUT', 504);
           throw new GameAiError('无法连接 AI 上游。', 'AI_UPSTREAM_FAILED', 502);
-        } finally {
-          clearTimeout(timer);
         }
       }
       throw new GameAiError('AI 上游暂时不可用。', 'AI_UPSTREAM_FAILED', 502);
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
+      }
     }
   };
 }

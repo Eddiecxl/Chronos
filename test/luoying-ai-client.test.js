@@ -66,7 +66,7 @@ test('personal Groq requests JSON object mode for reliable game turns', async ()
   assert.deepEqual(calls[0].response_format, { type: 'json_object' });
 });
 
-test('personal AI waits for the upstream retry-after window before a rate-limit retry', async () => {
+test('personal AI shows the upstream retry-after window immediately', async () => {
   let calls = 0;
   const waits = [];
   const client = createAiClient({
@@ -76,11 +76,12 @@ test('personal AI waits for the upstream retry-after window before a rate-limit 
       ? jsonResponse({ error: { message: 'Please try again in 4.5s' } }, 429, { 'retry-after': '4.5' })
       : jsonResponse({ choices: [{ message: { content: '{"blocks":[{"type":"sys","text":"连接成功"}]}' } }] }))
   });
-  await client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext());
-  assert.deepEqual(waits, [4500]);
+  await assert.rejects(client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext()), /5 秒/);
+  assert.deepEqual(waits, []);
+  assert.equal(calls, 1);
 });
 
-test('personal AI can follow two rolling rate-limit windows before succeeding', async () => {
+test('personal AI never keeps retrying against a depleted quota', async () => {
   let calls = 0;
   const waits = [];
   const client = createAiClient({
@@ -93,8 +94,9 @@ test('personal AI can follow two rolling rate-limit windows before succeeding', 
       return jsonResponse({ choices: [{ message: { content: '{"blocks":[{"type":"sys","text":"连接成功"}]}' } }] });
     }
   });
-  await client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext());
-  assert.deepEqual(waits, [2000, 750]);
+  await assert.rejects(client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext()), /2 秒/);
+  assert.deepEqual(waits, []);
+  assert.equal(calls, 1);
 });
 
 test('personal Mistral uses its fixed OpenAI-compatible endpoint', async () => {
@@ -123,6 +125,13 @@ test('parser preserves per-dialogue fact citations for local validation', () => 
     suggestions: ['追问方向', '检查泥土'], timeCost: 'brief'
   }));
   assert.deepEqual(parsed.blocks[0].factIds, ['fact:forest-footprints']);
+});
+
+test('bare world memory subject is canonicalized without changing or trusting its evidence', () => {
+  const parsed = parseNarration(JSON.stringify({ blocks: [{ type: 'narr', text: '我看见窗闩松动了。' }],
+    memory: { facts: [{ subjectId: 'world', predicate: 'observed', object: '窗闩松动了', confidence: 1 }] } }));
+  assert.equal(parsed.memory.facts[0].subjectId, 'world:observation');
+  assert.equal(parsed.memory.facts[0].object, '窗闩松动了');
 });
 
 test('parser discards legacy AI suggestions while retaining progress data', () => {

@@ -219,7 +219,7 @@ export function selectRelevantMemory(source, context = {}) {
   if (locationId) targets.add(locationId);
 
   const facts = state.memory.facts
-    .filter((fact) => !targets.size || targets.has(fact.subjectId) || fact.locked)
+    .filter((fact) => !targets.size || targets.has(fact.subjectId) || fact.locked || fact.subjectId.startsWith('world:'))
     .map((fact) => {
       let score = fact.locked ? 120 : 0;
       if (participantIds.includes(fact.subjectId)) score += 100;

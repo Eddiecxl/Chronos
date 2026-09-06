@@ -1,4 +1,5 @@
 import { derivedPlayerStats } from './equipment.js';
+import { generationOptions, throwIfCancelled } from './ai-policy.js';
 
 const SETTINGS_KEY = 'luoying_ai_v3';
 const SESSION_KEY = 'chronos-session-token-v1';
@@ -14,7 +15,7 @@ export const PROVIDERS = {
     credentialMode: 'site', recommended: true, tip: '稳定、节奏明快；可用网站额度或自己的 Mistral Key。'
   },
   gemini: {
-    label: 'Google Gemini', model: 'gemini-3.6-flash', credentialMode: 'site', advanced: true,
+    label: 'Google Gemini', model: 'gemini-3.6-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', credentialMode: 'site', advanced: true,
     tip: '稳定长上下文叙事；支持网站额度或个人 Google AI Studio Key。',
     models: ['gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite']
   },
@@ -99,7 +100,7 @@ function normalizeProgress(progress) {
 function normalizeMemory(memory) {
   const source = memory && typeof memory === 'object' && !Array.isArray(memory) ? memory : {};
   const facts = Array.isArray(source.facts) ? source.facts.slice(0, 40).map((fact) => ({
-    subjectId: cleanText(fact?.subjectId, 80), predicate: cleanText(fact?.predicate, 48),
+    subjectId: cleanText(fact?.subjectId, 80) === 'world' ? 'world:observation' : cleanText(fact?.subjectId, 80), predicate: cleanText(fact?.predicate, 48),
     object: cleanText(fact?.object, 160), confidence: Number(fact?.confidence ?? 1)
   })).filter((fact) => fact.subjectId && fact.predicate && fact.object) : [];
   const entities = Array.isArray(source.entities) ? source.entities.slice(0, 20).map((entity) => ({
@@ -249,29 +250,38 @@ function retryWaitMs(response, data, fallback) {
 }
 
 async function requestJson(fetchImpl, url, options, attempts = 2, sleep = delay) {
-  let lastError;
+  const parentSignal = options.signal;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  parentSignal?.addEventListener('abort', abort, { once: true });
+  const timer = setTimeout(abort, 28_000);
+  try {
+  throwIfCancelled(parentSignal);
   for (let attempt = 0; attempt < attempts; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 45_000);
-    try {
       const response = await fetchImpl(url, { ...options, signal: controller.signal });
-      const data = await response.json().catch(() => ({}));
+      const data = await response.json();
+      throwIfCancelled(parentSignal);
       if (response.ok) return data;
       const message = data?.error?.message || data?.error || `HTTP ${response.status}`;
-      if (![429, 502, 503].includes(response.status) || attempt === attempts - 1) throw new Error(String(message));
-      lastError = new Error(String(message));
-      const waitMs = retryWaitMs(response, data, attempt ? 2_400 : 900);
-      clearTimeout(timer);
+      if (response.status === 429) {
+        const seconds = Math.ceil((data.retryAfterMs || retryWaitMs(response, data, 10_000)) / 1000);
+        throw new Error(`当前模型额度繁忙，约 ${seconds} 秒后再试，或切换模型。`);
+      }
+      if (![502, 503].includes(response.status) || attempt === attempts - 1) throw new Error(String(message));
+      const waitMs = retryWaitMs(response, data, 500);
+      if (waitMs > 1500) throw new Error(String(message));
       await sleep(waitMs);
-      continue;
-    } catch (error) {
-      if (error?.name === 'AbortError') throw new Error('AI 请求超时。');
-      if (!lastError || attempt === attempts - 1) throw error;
-    } finally {
-      clearTimeout(timer);
-    }
+      throwIfCancelled(parentSignal);
+      if (controller.signal.aborted) throw new Error('AI 请求超时，请重试或切换模型。');
   }
-  throw lastError || new Error('AI 请求失败。');
+  } catch (error) {
+    throwIfCancelled(parentSignal);
+    if (controller.signal.aborted || error?.name === 'AbortError') throw new Error('AI 请求超时，请重试或切换模型。');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener('abort', abort);
+  }
 }
 
 export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis), storage = globalThis.localStorage, sleep = delay } = {}) {
@@ -297,10 +307,11 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
         const token = storage?.getItem(SESSION_KEY) || '';
         if (!token) throw new Error('请先登录 Chronos 再使用网站 AI。');
         const data = await requestJson(fetchImpl, '/api/game/ai', {
+          signal: context.signal,
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
           body: JSON.stringify({ provider: settings.provider, model: settings.model, messages, requestType, transactionId })
-        }, 3, sleep);
+        }, 1, sleep);
         if (typeof data?.text !== 'string' || !data.text.trim()) throw new Error('网站 AI 返回为空。');
         return data.text;
       }
@@ -314,23 +325,24 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
           parts: [{ text: message.content }]
         }));
         const data = await requestJson(fetchImpl, `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+          signal: context.signal,
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-goog-api-key': settings.key },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: systemText }] }, contents, generationConfig: { temperature: 0.85, responseMimeType: 'application/json' } })
-        }, 3, sleep);
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: systemText }] }, contents, generationConfig: generationOptions('gemini', settings.model, requestType) })
+        }, 2, sleep);
         return extractGemini(data);
       }
 
       if (!/^https?:\/\//i.test(settings.baseUrl)) throw new Error('Base URL 必须是 http 或 https 地址。');
       if (!settings.model) throw new Error('请填写模型名称。');
       const data = await requestJson(fetchImpl, `${settings.baseUrl}/chat/completions`, {
+        signal: context.signal,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${settings.key}` },
         body: JSON.stringify({
-          model: settings.model, messages, temperature: 0.85, max_tokens: 1800,
-          ...(settings.provider === 'groq' ? { response_format: { type: 'json_object' } } : {})
+          model: settings.model, messages, ...generationOptions(settings.provider, settings.model, requestType)
         })
-      }, 3, sleep);
+      }, 2, sleep);
       return extractOpenAi(data);
     },
     async testConnection(settings) {
