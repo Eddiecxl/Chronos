@@ -9,7 +9,7 @@ import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
 import { createAiTurnRunner } from './ai-turn.js';
 import { classifyTurn } from './turn-router.js';
 import {
-  EQUIPMENT_SLOT_ORDER, commitAiEquipmentForActiveJourney, restoreAiEquipmentState
+  derivedPlayerStats, EQUIPMENT_SLOT_ORDER, commitAiEquipmentForActiveJourney, restoreAiEquipmentState
 } from './equipment.js';
 import {
   buildCharacterView, buildCodexView, buildHistoryView, buildInventoryView, buildMapView, buildQuestView
@@ -119,18 +119,19 @@ function updatePauseBadge() {
 function renderTopbar() {
   if (!state) return;
   const realm = REALMS[state.player.realm] || REALMS[0];
+  const derived = derivedPlayerStats(state);
   dom.statusName.textContent = state.player.name;
   dom.statusRealm.textContent = realm.name;
   dom.statusHp.textContent = `${state.player.hp}/${state.player.maxHp}`;
   dom.statusQi.textContent = `${state.player.qi}/${realm.need}`;
-  dom.statusSpirit.textContent = `${state.player.spirit}/${state.player.maxSpirit}`;
+  dom.statusSpirit.textContent = `${state.player.spirit}/${derived.maxSpirit}`;
   dom.statusGold.textContent = String(state.player.gold);
   dom.statusLocation.textContent = state.story.location;
   dom.statusMode.textContent = mode === 'ai' ? `AI · ${PROVIDERS[aiSettings.provider]?.label || '未设置'}` : '本地版';
   dom.modeBadge.classList.toggle('ai-mode', mode === 'ai');
   dom.hpBar.style.width = `${Math.max(0, Math.min(100, state.player.hp / state.player.maxHp * 100))}%`;
   dom.qiBar.style.width = `${Math.max(0, Math.min(100, state.player.qi / realm.need * 100))}%`;
-  dom.spiritBar.style.width = `${Math.max(0, Math.min(100, state.player.spirit / state.player.maxSpirit * 100))}%`;
+  dom.spiritBar.style.width = `${Math.max(0, Math.min(100, state.player.spirit / derived.maxSpirit * 100))}%`;
   dom.actLabel.textContent = ACT_TITLES[state.story.act] || `第 ${state.story.act} 幕`;
   dom.dayLabel.textContent = `第 ${state.story.day} 日 · ${state.story.period}`;
 }

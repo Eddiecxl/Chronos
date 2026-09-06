@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { CHAPTERS, LOCATIONS, NPCS } from '../public/luoying-xiantu/game-data.js';
+import { equipOwnedItem } from '../public/luoying-xiantu/equipment.js';
 import {
   buildRepairMessages, commitValidatedWorldTurn, createSceneContract, validateAiWorldTurn
 } from '../public/luoying-xiantu/director.js';
@@ -26,6 +27,25 @@ function seededAiState() {
   };
   return state;
 }
+
+test('AI scene contracts expose stacked equipped stats without changing persistent base stats', () => {
+  let state = createGameState('照月', 'ai', () => 'derived-ai');
+  for (const itemName of ['玄铁剑', '外门青衫', '云纹束冠', '踏云履']) {
+    state.inventory.items[itemName] = 1;
+    state = equipOwnedItem(state, itemName, 'ai');
+  }
+
+  const contract = createSceneContract(state, '我准备迎战', 'turn-derived');
+
+  assert.deepEqual(
+    { attack: contract.player.attack, defense: contract.player.defense, maxSpirit: contract.player.maxSpirit },
+    { attack: 29, defense: 14, maxSpirit: 40 }
+  );
+  assert.deepEqual(
+    { attack: state.player.attack, defense: state.player.defense, maxSpirit: state.player.maxSpirit },
+    { attack: 11, defense: 4, maxSpirit: 30 }
+  );
+});
 
 function narrationWithText(text) {
   const detailedText = `${text}我俯身拨开积在树根旁的湿叶，泥土里残留的痕迹被雨水冲成断续细线。风穿过樱林时带来一缕陌生焦味，我循着气味望向西侧石径，记下灯火移动的方向和枝叶折断的位置。这些变化让我有了可以继续追查的依据，却也意味着藏在暗处的人已经离得不远。`;

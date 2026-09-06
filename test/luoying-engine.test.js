@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState, migrateGameState } from '../public/luoying-xiantu/game-state.js';
 import { applyValidatedEffects, dispatchLocalChoice, getAvailableActions } from '../public/luoying-xiantu/game-engine.js';
+import { equipOwnedItem, normalizeEquipment } from '../public/luoying-xiantu/equipment.js';
 
 test('the local intro enters the sect through stable choice ids', () => {
   let state = createGameState('沈桃', 'local');
@@ -41,6 +42,26 @@ test('AI effects cannot invent items or excessive rewards', () => {
   assert.equal(state.story.location, '赵府柴房');
 });
 
+test('AI spirit effects clamp against an equipped accessory cap without changing the bare cap', () => {
+  let state = createGameState('照月', 'ai', () => 'spirit-cap');
+  state.inventory.items['同心结'] = 1;
+  state = equipOwnedItem(state, '同心结', 'ai');
+  state.player.spirit = 40;
+
+  const restored = applyValidatedEffects(state, { spirit: 30 });
+  const drained = applyValidatedEffects(restored, { spirit: -40 });
+
+  assert.equal(restored.player.spirit, 42);
+  assert.equal(drained.player.spirit, 2);
+  assert.equal(restored.player.maxSpirit, 30);
+  assert.equal(restored.equipment.accessory, '同心结');
+
+  const unequipped = structuredClone(restored);
+  unequipped.equipment = normalizeEquipment({});
+  const clampedAfterUnequip = applyValidatedEffects(unequipped, {});
+  assert.equal(clampedAfterUnequip.player.spirit, 30);
+});
+
 test('mercy path unlocks the guardian ending', () => {
   const state = createGameState();
   state.pending = { type: 'final-choice' };
@@ -63,6 +84,20 @@ test('battle actions defeat a weakened enemy and grant qi', () => {
   assert.equal(result.state.stats.battlesWon, 1);
   assert.ok(result.state.player.qi > 0);
   assert.equal('exp' in result.state.player, false);
+});
+
+test('local legacy weapon and armor keep their established combat calculation', () => {
+  const state = createGameState('沈桃', 'local');
+  state.pending = null;
+  state.equipment = normalizeEquipment({ weapon: '玄铁剑', armor: '外门青衫' });
+  state.battle = { enemyId: 'spirit-rat', hp: 28, maxHp: 28, defending: false, turn: 1 };
+
+  const result = dispatchLocalChoice(state, 'battle:attack', () => 0);
+
+  assert.equal(result.state.battle.hp, 2);
+  assert.equal(result.state.player.hp, 98);
+  assert.equal(result.state.player.attack, 11);
+  assert.equal(result.state.player.defense, 4);
 });
 
 test('techniques consume spirit while cultivation raises qi', () => {

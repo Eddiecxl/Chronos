@@ -1,4 +1,4 @@
-import { normalizeEquipment } from './equipment.js';
+import { derivedPlayerStats, normalizeEquipment } from './equipment.js';
 
 export const GAME_SCHEMA_VERSION = 4;
 export const REALM_COUNT = 23;
@@ -265,7 +265,7 @@ function normalizeV3(input, expectedMode) {
     maxHp: Math.floor(clamp(player.maxHp || 100, 1, 9999)),
     hp: 1,
     qi: Math.floor(clamp(player.qi ?? player.exp, 0, 999999)),
-    spirit: Math.floor(clamp(player.spirit ?? maxSpirit, 0, maxSpirit)),
+    spirit: Math.floor(clamp(player.spirit ?? maxSpirit, 0, 9999)),
     maxSpirit,
     gold: Math.floor(clamp(player.gold, 0, 999999)),
     attack: Math.floor(clamp(player.attack || 11, 1, 9999)),
@@ -305,6 +305,7 @@ function normalizeV3(input, expectedMode) {
   };
   const equipment = isRecord(input.equipment) ? input.equipment : {};
   base.equipment = normalizeEquipment(equipment);
+  base.player.spirit = Math.min(base.player.spirit, derivedPlayerStats(base).maxSpirit);
   base.techniques = {
     known: stringList(techniques.known, 30, 32),
     equipped: stringList(techniques.equipped, 4, 32),

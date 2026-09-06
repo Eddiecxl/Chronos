@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { answerSystemQuery, classifyTurn } from '../public/luoying-xiantu/turn-router.js';
+import { equipOwnedItem } from '../public/luoying-xiantu/equipment.js';
 
 function seededAiState() {
   const state = createGameState('照月', 'ai', () => 'pause-journey');
@@ -47,6 +48,23 @@ test('system answers leave time combat and NPC plans untouched', () => {
   assert.equal(answer.handled, true);
   assert.match(answer.blocks[0].text, /灵气/);
   assert.equal(JSON.stringify(state), before);
+});
+
+test('time-stop status and equipment answers use equipped derived stats', () => {
+  let state = createGameState('照月', 'ai', () => 'derived-system');
+  for (const itemName of ['玄铁剑', '外门青衫', '同心结']) {
+    state.inventory.items[itemName] = 1;
+    state = equipOwnedItem(state, itemName, 'ai');
+  }
+
+  const status = answerSystemQuery(state, '查看我的状态').blocks[0].text;
+  const equipment = answerSystemQuery(state, '查看装备').blocks[0].text;
+
+  assert.match(status, /灵力 30\/42/);
+  assert.match(equipment, /攻击 29/);
+  assert.match(equipment, /防御 7/);
+  assert.match(equipment, /灵力上限 42/);
+  assert.equal(state.player.maxSpirit, 30);
 });
 
 test('system answers cover skills inventory relationships location and recap with sys blocks only', () => {

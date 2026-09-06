@@ -1,5 +1,5 @@
 import { migrateGameState } from './game-state.js';
-import { normalizeEquipment } from './equipment.js';
+import { derivedPlayerStats, normalizeEquipment } from './equipment.js';
 import {
   ACHIEVEMENTS, ENDINGS, ENEMIES, ITEMS, LOCATIONS, NPCS, QUESTS,
   RANDOM_EVENTS, REALMS, STORY_SCENES, TECHNIQUES
@@ -149,7 +149,7 @@ function gainQi(state, amount, blocks) {
     state.player.attack += 4 + Math.floor(state.player.realm / 3);
     state.player.defense += 2 + Math.floor(state.player.realm / 5);
     state.player.maxSpirit += 3;
-    state.player.spirit = state.player.maxSpirit;
+    state.player.spirit = derivedPlayerStats(state).maxSpirit;
     realms.push(REALMS[state.player.realm].name);
   }
   for (const realm of realms) blocks.push(sys(`灵台轰鸣，气机周天圆满——突破至 ${realm}！`));
@@ -228,13 +228,11 @@ function handleIntro(state, raw, blocks) {
 }
 
 function currentAttack(state) {
-  const weapon = ITEMS[state.equipment.weapon];
-  return state.player.attack + (weapon?.attack || 0);
+  return derivedPlayerStats(state).attack;
 }
 
 function currentDefense(state) {
-  const armor = ITEMS[state.equipment.armor];
-  return state.player.defense + (armor?.defense || 0);
+  return derivedPlayerStats(state).defense;
 }
 
 function startBattle(state, enemyId, blocks) {
@@ -300,7 +298,7 @@ function handleBattle(state, raw, random, blocks) {
     enemyTurn(state, enemy, random, blocks, 0.9);
   } else if (/防|守|格挡/.test(raw)) {
     state.battle.defending = true;
-    state.player.spirit = Math.min(state.player.maxSpirit, state.player.spirit + 5);
+    state.player.spirit = Math.min(derivedPlayerStats(state).maxSpirit, state.player.spirit + 5);
     blocks.push(narr('你沉肩稳息，把灵力收束成护体气障。'));
     enemyTurn(state, enemy, random, blocks);
   } else if (/丹|符|药|使用/.test(raw) && useBattleItem(state, raw, blocks)) {
@@ -417,7 +415,8 @@ function talk(state, raw, blocks) {
 }
 
 function showStatus(state, blocks) {
-  blocks.push(sys(`${state.player.name} · ${REALMS[state.player.realm].name} · 气血 ${state.player.hp}/${state.player.maxHp} · 灵气 ${state.player.qi}/${REALMS[state.player.realm].need} · 灵力 ${state.player.spirit}/${state.player.maxSpirit} · 灵石 ${state.player.gold} · 第 ${state.story.day} 日 · ${state.story.location}`));
+  const derived = derivedPlayerStats(state);
+  blocks.push(sys(`${state.player.name} · ${REALMS[state.player.realm].name} · 气血 ${state.player.hp}/${state.player.maxHp} · 灵气 ${state.player.qi}/${REALMS[state.player.realm].need} · 灵力 ${state.player.spirit}/${derived.maxSpirit} · 灵石 ${state.player.gold} · 第 ${state.story.day} 日 · ${state.story.location}`));
 }
 
 function showQuests(state, blocks) {
@@ -518,7 +517,7 @@ export function applyValidatedEffects(source, effects = {}) {
   const qiEffect = effects.qi ?? effects.exp;
   if (Number.isFinite(Number(qiEffect)) && Number(qiEffect) > 0) gainQi(state, clamp(qiEffect, 0, 80), []);
   if (Number.isFinite(Number(effects.spirit))) {
-    state.player.spirit = clamp(state.player.spirit + clamp(effects.spirit, -40, 30), 0, state.player.maxSpirit);
+    state.player.spirit = clamp(state.player.spirit + clamp(effects.spirit, -40, 30), 0, derivedPlayerStats(state).maxSpirit);
   }
   if (Number.isFinite(Number(effects.hp))) state.player.hp = clamp(hpBeforeEffects + clamp(effects.hp, -80, 40), 1, state.player.maxHp);
   if (Number.isFinite(Number(effects.gold))) state.player.gold = Math.max(0, state.player.gold + clamp(effects.gold, -100, 100));

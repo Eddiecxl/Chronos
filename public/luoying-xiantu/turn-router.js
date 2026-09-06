@@ -107,8 +107,9 @@ function inventoryAnswer(state) {
 }
 
 function equipmentAnswer(state) {
-  const slots = buildCharacterView(state).slots;
-  return systemBlock(`装备：武器 ${slots.hands || '无'}｜护甲 ${slots.body || '无'}｜配饰 ${slots.neck || '无'}。装备详情可在背包面板查看。`);
+  const view = buildCharacterView(state);
+  const { slots } = view;
+  return systemBlock(`装备：武器 ${slots.hands || '无'}｜护甲 ${slots.body || '无'}｜配饰 ${slots.neck || '无'}｜攻击 ${view.stats.attack}｜防御 ${view.stats.defense}｜灵力上限 ${view.maxSpirit}。装备详情可在背包面板查看。`);
 }
 
 function questAnswer(state) {

@@ -1,6 +1,7 @@
 import { migrateGameState } from './game-state.js';
 import { applyValidatedEffects } from './game-engine.js';
 import { CHAPTERS, ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
+import { derivedPlayerStats } from './equipment.js';
 
 const TIME_COSTS = { instant: 0, brief: 10, scene: 60, long: 240 };
 const EFFECT_CAPS = {
@@ -195,6 +196,13 @@ function contractActors(state, input, chapter) {
 
 export function createSceneContract(source, input, turnId) {
   const state = migrateGameState(source, 'ai');
+  const derived = derivedPlayerStats(state);
+  const contractPlayer = {
+    ...state.player,
+    attack: derived.attack,
+    defense: derived.defense,
+    maxSpirit: derived.maxSpirit
+  };
   const chapter = currentChapter(state);
   const actors = contractActors(state, input, chapter);
   const actorFactIds = new Set(actors.flatMap((actor) => actor.knownFactIds));
@@ -259,9 +267,9 @@ export function createSceneContract(source, input, turnId) {
     idleLimit: 2,
     consecutiveIdleTurns: state.director.consecutiveIdleTurns,
     player: {
-      realm: state.player.realm, hp: state.player.hp, maxHp: state.player.maxHp,
-      qi: state.player.qi, spirit: state.player.spirit, maxSpirit: state.player.maxSpirit,
-      gold: state.player.gold
+      realm: contractPlayer.realm, hp: contractPlayer.hp, maxHp: contractPlayer.maxHp,
+      qi: contractPlayer.qi, spirit: contractPlayer.spirit, maxSpirit: contractPlayer.maxSpirit,
+      gold: contractPlayer.gold, attack: contractPlayer.attack, defense: contractPlayer.defense
     }
   });
 }
