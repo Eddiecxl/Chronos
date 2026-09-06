@@ -6,7 +6,7 @@ import {
 import {
   applyMemoryCandidates, registerEntityCandidates, selectRelevantMemory, updateChapterSummary
 } from './memory.js';
-import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, visibleTextFor } from './discovery.js';
+import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, storyVisibleTextFor } from './discovery.js';
 import { answerSystemQuery } from './turn-router.js';
 import { LOCATIONS } from './game-data.js';
 
@@ -21,6 +21,7 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 7. NPC 只能引用其 knownFactIds 中的事实；新角色和地点必须提供稳定 generated: ID、目的与归属地点。
 8. 每段已登记 NPC 对白都要在该 dlg 块的 factIds 列出至少一项实际引用的 knownFactIds；日常对白可引用其 fact:authored:...:identity 固定身份事实，绝不能空引用。usedFactIdsByActor 同时给出角色汇总，其键优先使用 actors 中的精确 id（兼容 name），不得自创 actor: 前缀。NPC 可在 dlg 对白中用“你”称呼我。
 9. 任务只允许按场景契约 activeQuests 操作：questProgress 只能推进本回合开始前已接取任务，completeQuests 必须同回合推进至 target，failQuests 只能失败已接取任务；addQuests 不得与推进、完成或失败同回合发生。
+10. 提交章节出口时，effects 必须包含一个合法且具体的地点或任务效果目标；玩家本回合原话必须明确肯定并写出同一个目标。仅有出口标记、空 effects、含糊“继续观察”或拒绝目标都不得跳章。chapter.exits 的 targetLocation 是可用于出口的合法目的地。
 只输出一个严格 JSON 对象，不要代码围栏。世界回合格式：
 {"blocks":[{"type":"narr","text":"旁白"},{"type":"dlg","name":"角色名","text":"对白","factIds":[]}],"effects":{"hp":0,"qi":0,"spirit":0,"gold":0,"relationships":{},"addItems":{},"addQuests":[],"location":"地点名"},"progress":{"advanced":["scene:进展ID"],"consequences":["后果"],"openLoops":["loop:悬念ID"],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[{"subjectId":"world:主题","predicate":"事实关系","object":"事实内容","confidence":1}],"entities":[],"chapterSummary":"可选章节摘要"},"usedFactIdsByActor":{},"timeCost":"instant|brief|scene|long"}`;
 
@@ -159,7 +160,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       if (!validation?.ok) throw new Error(`AI 内容连续 ${maxAttempts} 次未通过验证：${validation?.errors?.join('；') || '未知结构错误'}`);
 
       let committed = commitValidatedWorldTurn(state, contract, narration);
-      const visibleText = visibleTextFor(narration);
+      const visibleText = storyVisibleTextFor(narration);
       const visibleEntityIds = (narration.memory?.entities || [])
         .filter((entity) => visibleText.includes(String(entity?.name || '').trim()))
         .map((entity) => entity.id);

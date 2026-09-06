@@ -330,9 +330,10 @@ test('a real chapter exit resets hidden chapter pacing counters', () => {
   state.director.turnsSinceChapterProgress = 6;
   state.director.pacePressure = 2;
   state.director.openLoops = ['opportunity:act2-forest-signs'];
-  const contract = createSceneContract(state, '我决定交付证据给执事', 'turn-pace-exit');
+  const contract = createSceneContract(state, '我决定前往落霞宗外门交付证据给执事', 'turn-pace-exit');
   const narration = {
     ...narrationWithText('我把拓印和黑砂交到戒律堂，执事验明来源后立刻封锁后山。'),
+    effects: { location: '落霞宗外门' },
     progress: {
       advanced: ['chapter:act2-forest-signs:complete'], consequences: ['宗门开始戒备'],
       openLoops: [], resolvedLoops: ['loop:demonic-trail'], dangerClocks: { demonicTrail: 1 }
@@ -495,13 +496,33 @@ test('chapter exits require a pre-existing opportunity marker and structural pre
   const markerState = structuredClone(state);
   markerState.director.chapterTurns = 1;
   markerState.director.openLoops = ['opportunity:act2-forest-signs'];
-  const markerContract = createSceneContract(markerState, '我决定交付证据', 'turn-exit-existing-opportunity');
-  const validExit = { ...narration, progress: { ...narration.progress, advanced: ['chapter:act2-forest-signs:complete'] } };
+  const markerContract = createSceneContract(markerState, '我决定前往落霞宗外门交付证据', 'turn-exit-existing-opportunity');
+  const validExit = { ...narration, effects: { location: '落霞宗外门' }, progress: { ...narration.progress, advanced: ['chapter:act2-forest-signs:complete'] } };
   assert.equal(validateAiWorldTurn(markerState, markerContract, validExit).ok, true);
 
   const sameTurn = { ...validExit, progress: { ...validExit.progress, advanced: ['opportunity:act2-forest-signs', 'chapter:act2-forest-signs:complete'] } };
   const fresh = createSceneContract(structuredClone(state), '我决定交付证据', 'turn-exit-same-turn-marker');
   assert.equal(validateAiWorldTurn(state, fresh, sameTurn).ok, false);
+});
+
+test('chapter exits require an affirmative choice bound to a concrete legal effect target', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 1;
+  state.director.openLoops = ['opportunity:act2-forest-signs'];
+  const emptyContract = createSceneContract(state, '我决定交付证据给执事', 'turn-exit-empty-target');
+  const emptyExit = narrationWithText('我把证据交到戒律堂，执事随即封锁后山。');
+  emptyExit.progress.advanced = ['chapter:act2-forest-signs:complete'];
+  assert.equal(validateAiWorldTurn(state, emptyContract, emptyExit).ok, false);
+
+  const rejectedContract = createSceneContract(state, '我决定留在樱林继续观察，不去青石镇', 'turn-exit-wrong-target');
+  const targetedExit = {
+    ...emptyExit,
+    effects: { location: '落霞宗外门' }
+  };
+  assert.equal(validateAiWorldTurn(state, rejectedContract, targetedExit).ok, false);
+
+  const chosenContract = createSceneContract(state, '我决定前往落霞宗外门交付证据', 'turn-exit-chosen-target');
+  assert.equal(validateAiWorldTurn(state, chosenContract, targetedExit).ok, true);
 });
 
 test('a world response with no progress is rejected', () => {
@@ -668,10 +689,10 @@ test('validated commits advance time clocks loops and authored chapters without 
   const state = seededAiState();
   state.director.chapterTurns = 1;
   state.director.openLoops = ['opportunity:act2-forest-signs'];
-  const contract = createSceneContract(state, '我决定交付证据给执事', 'turn-8');
+  const contract = createSceneContract(state, '我决定前往落霞宗外门交付证据给执事', 'turn-8');
   const narration = {
     blocks: [{ type: 'narr', text: '我把装着魔砂与足迹拓印的布包交到戒律堂案前。值守弟子先是皱眉，随后取出验魔针逐一核对；针尖转黑的刹那，堂内原本松散的说话声全停了。执事当场封住后山令牌，又派人通知巡山队改换暗号。我虽然暂时摆脱独自查证的风险，却也让藏在宗门里的眼线知道证据已经暴露。' }],
-    effects: { qi: 12, spirit: -4 },
+    effects: { qi: 12, spirit: -4, location: '落霞宗外门' },
     progress: {
       advanced: ['chapter:act2-forest-signs:complete'], consequences: ['宗门开始戒备'],
       openLoops: ['loop:masked-scout'], resolvedLoops: ['loop:demonic-trail'],
@@ -715,9 +736,10 @@ test('soft rails reject empty wandering but allow meaningful side routes and cha
   const advancingState = structuredClone(state);
   advancingState.director.chapterTurns = 1;
   advancingState.director.openLoops = ['opportunity:act2-forest-signs'];
-  const advancingContract = createSceneContract(advancingState, '我决定交付证据', 'turn-rail-exit');
+  const advancingContract = createSceneContract(advancingState, '我决定前往落霞宗外门交付证据', 'turn-rail-exit');
   const advancing = {
     ...wandering,
+    effects: { location: '落霞宗外门' },
     progress: { ...wandering.progress, advanced: ['chapter:act2-forest-signs:complete'] }
   };
   assert.equal(validateAiWorldTurn(advancingState, advancingContract, advancing, []).ok, true);
@@ -729,9 +751,10 @@ test('authored discovery progress creates the stable fact required by a chapter 
   state.memory.entities['npc:lin-xiaoman'].knownFactIds = [];
   state.director.chapterTurns = 1;
   state.director.openLoops = ['opportunity:act2-forest-signs'];
-  const contract = createSceneContract(state, '我决定交付证据并查清足迹', 'turn-authored-fact');
+  const contract = createSceneContract(state, '我决定前往落霞宗外门交付证据并查清足迹', 'turn-authored-fact');
   const narration = {
     ...narrationWithText('我在泥痕深处挑出几粒黑砂，验魔符贴近时立刻卷边发焦，足以证明这串足迹来自魔修。我用油纸封住样本，再把足印的方向与深浅逐一拓下，随后沿避雨石廊赶到戒律堂。值守弟子核对证据后敲响警钟，后山各处阵门随即落锁；我的发现终于迫使宗门正视潜入者。'),
+    effects: { location: '落霞宗外门' },
     progress: {
       advanced: ['discovery:forest-footprints', 'chapter:act2-forest-signs:complete'],
       consequences: ['戒律堂开始封锁后山'], openLoops: [], dangerClocks: { demonicTrail: 1 }

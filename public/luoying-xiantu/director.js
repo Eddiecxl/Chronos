@@ -2,7 +2,7 @@ import { migrateGameState } from './game-state.js';
 import { applyValidatedEffects } from './game-engine.js';
 import { CHAPTERS, ITEMS, LOCATIONS, NPCS, QUESTS } from './game-data.js';
 import { derivedPlayerStats } from './equipment.js';
-import { hasVisibleFactEvidence, visibleTextFor } from './discovery.js';
+import { hasVisibleFactEvidence, storyVisibleTextFor } from './discovery.js';
 
 const TIME_COSTS = { instant: 0, brief: 10, scene: 60, long: 240 };
 const EFFECT_CAPS = {
@@ -263,6 +263,13 @@ export function createSceneContract(source, input, turnId) {
   const unlockedLocations = Object.entries(LOCATIONS)
     .filter(([, location]) => state.story.act >= location.act && state.player.realm >= location.realm)
     .map(([name, location]) => ({ id: location.id, name }));
+  const exitDestinations = chapter.exits
+    .map((exit) => CHAPTER_ENTRY_LOCATIONS[exit.nextChapterId])
+    .filter(Boolean)
+    .map((name) => ({ id: LOCATIONS[name]?.id, name }))
+    .filter((location) => location.id);
+  const legalLocations = [...new Map([...unlockedLocations, ...exitDestinations]
+    .map((location) => [location.id, location])).values()];
   const requiredProgressIds = missingRequiredProgressIds(chapter, rememberedFacts);
   const stalledTurns = state.director.turnsSinceChapterProgress;
   const chapterTurns = state.director.chapterTurns;
@@ -279,7 +286,11 @@ export function createSceneContract(source, input, turnId) {
         progressId: AUTHORED_FACTS[factId]?.progressId || null,
         description: AUTHORED_FACTS[factId]?.object || null
       })),
-      dangerClock: structuredClone(chapter.dangerClock), exits: structuredClone(chapter.exits),
+      dangerClock: structuredClone(chapter.dangerClock),
+      exits: chapter.exits.map((exit) => ({
+        ...structuredClone(exit),
+        targetLocation: CHAPTER_ENTRY_LOCATIONS[exit.nextChapterId] || null
+      })),
       prerequisites
     },
     sceneGoal: state.director.sceneGoal || chapter.goal,
@@ -291,7 +302,7 @@ export function createSceneContract(source, input, turnId) {
     })),
     openLoopIds: [...state.director.openLoops],
     legalItemIds: Object.keys(ITEMS),
-    legalLocations: unlockedLocations,
+    legalLocations,
     legalQuestIds: legalQuestIds(state, chapter),
     activeQuests: state.quests.active.map((quest) => ({ id: quest.id, progress: quest.progress, target: quest.target })),
     activeQuestIds: state.quests.active.map((quest) => quest.id),
@@ -438,6 +449,40 @@ function subjectNpcName(state, subjectId) {
   return authoredNpcName(subjectId) || cleanText(state.memory.entities?.[subjectId]?.name, 40);
 }
 
+function factTextValues(raw) {
+  const values = [];
+  const visit = (value) => {
+    if (typeof value === 'string' || typeof value === 'number') values.push(String(value));
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === 'object') Object.values(value).forEach(visit);
+  };
+  visit(raw);
+  return values.join(' ');
+}
+
+function stableReferenceIds(raw) {
+  return [...new Set(factTextValues(raw).match(/(?:generated:npc|npc|location|item|quest):[\p{L}\p{N}_.-]+/gu) || [])];
+}
+
+function stableReferenceIsVisible(state, subjectId, normalizedEffects, visibleSubjects, positiveItems) {
+  if (subjectId.startsWith('npc:') || subjectId.startsWith('generated:npc:')) {
+    return npcDiscovered(state, subjectId, visibleSubjects);
+  }
+  if (subjectId.startsWith('location:')) return locationDiscovered(state, subjectId, normalizedEffects, '');
+  if (subjectId.startsWith('item:')) {
+    const itemName = subjectId.slice('item:'.length);
+    return Boolean(ITEMS[itemName] && (Number(state.inventory.items?.[itemName] || 0) > 0
+      || state.codex.items.includes(itemName) || positiveItems.has(itemName)));
+  }
+  if (subjectId.startsWith('quest:')) {
+    const questId = subjectId.slice('quest:'.length);
+    return Boolean(QUESTS[questId] && (state.quests.active.some((quest) => quest.id === questId)
+      || state.quests.completed.includes(questId) || state.quests.failed.includes(questId)
+      || normalizedEffects?.addQuests?.includes(questId)));
+  }
+  return false;
+}
+
 function npcDiscovered(state, subjectId, visibleSubjects) {
   if (visibleSubjects.has(subjectId)) return true;
   const name = subjectNpcName(state, subjectId);
@@ -463,7 +508,7 @@ function generatedNpcCandidate(candidate, visibleText) {
 
 function validateMemoryFactVisibility(state, contract, narration, normalizedEffects, errors) {
   const candidates = Array.isArray(narration?.memory?.entities) ? narration.memory.entities : [];
-  const visibleText = visibleTextFor(narration);
+  const visibleText = storyVisibleTextFor(narration);
   const candidateById = new Map(candidates.filter((entity) => generatedNpcCandidate(entity, visibleText))
     .map((entity) => [cleanId(entity?.id), entity]));
   const visibleSubjects = validatedDialogueSubjects(contract, narration.blocks || []);
@@ -480,7 +525,7 @@ function validateMemoryFactVisibility(state, contract, narration, normalizedEffe
       if (!hasVisibleFactEvidence(raw, visibleText)) {
         errors.push(`世界记忆事实 ${subjectId} 缺少本回合可见正文的直接证据。`);
       }
-      const factText = `${cleanText(raw?.predicate, 48)} ${cleanText(raw?.object, 160)}`;
+      const factText = factTextValues(raw);
       for (const [id, npc] of AUTHORED_NPCS_BY_ID) {
         if (factText.includes(npc.name) && !npcDiscovered(state, id, visibleSubjects)) {
           errors.push(`世界记忆事实引用了未发现角色：${npc.name}。`);
@@ -489,6 +534,11 @@ function validateMemoryFactVisibility(state, contract, narration, normalizedEffe
       for (const [name, location] of Object.entries(LOCATIONS)) {
         if (factText.includes(name) && !locationDiscovered(state, location.id, normalizedEffects, visibleText)) {
           errors.push(`世界记忆事实引用了未发现地点：${name}。`);
+        }
+      }
+      for (const referenceId of stableReferenceIds(raw)) {
+        if (!stableReferenceIsVisible(state, referenceId, normalizedEffects, visibleSubjects, positiveItems)) {
+          errors.push(`世界记忆事实引用了未发现或无效的稳定对象：${referenceId}。`);
         }
       }
       continue;
@@ -619,7 +669,14 @@ function playerChoseOpportunity(input, effects = {}) {
   for (const questId of Array.isArray(effects?.addQuests) ? effects.addQuests : []) {
     targets.push(QUESTS[questId]?.title || String(questId));
   }
-  return !targets.length || targets.some((target) => target && text.includes(target));
+  for (const questId of [
+    ...Object.keys(effects?.questProgress || {}),
+    ...(Array.isArray(effects?.completeQuests) ? effects.completeQuests : []),
+    ...(Array.isArray(effects?.failQuests) ? effects.failQuests : [])
+  ]) {
+    targets.push(QUESTS[questId]?.title || String(questId));
+  }
+  return targets.length > 0 && targets.some((target) => target && text.includes(target));
 }
 
 function validateDecisiveOpportunityEffects(contract, advanced, normalizedEffects, errors) {

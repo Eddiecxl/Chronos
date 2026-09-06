@@ -2,11 +2,15 @@ const uniquePush = (list, value) => {
   if (value && !list.includes(value)) list.push(value);
 };
 
-export function visibleTextFor(narration) {
+export function storyVisibleTextFor(narration) {
   return (narration?.blocks || [])
-    .filter((block) => ['narr', 'dlg', 'sys'].includes(block?.type))
+    .filter((block) => ['narr', 'dlg'].includes(block?.type))
     .map((block) => `${block?.name || ''}${block?.text || ''}`)
     .join('\n');
+}
+
+export function visibleTextFor(narration) {
+  return storyVisibleTextFor(narration);
 }
 
 export function hasVisibleFactEvidence(fact, visibleText) {
@@ -42,7 +46,7 @@ export function applyCommittedDiscoveries(source, narration) {
 
   for (const entity of Object.values(state.memory.entities || {})) {
     const generatedNpc = entity.kind === 'npc' && entity.id?.startsWith('generated:npc:')
-      && visibleTextFor(narration).includes(entity.name);
+      && storyVisibleTextFor(narration).includes(entity.name);
     if (entity.kind === 'npc' && entity.name && (speakers.has(entity.name) || generatedNpc)) {
       uniquePush(state.codex.characters, entity.name);
     }

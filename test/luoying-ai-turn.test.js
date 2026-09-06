@@ -242,6 +242,34 @@ test('world facts need committed visible evidence and cannot reveal undiscovered
   assert.equal(buildHistoryView(result.state || state).facts.some((fact) => /飞升台|林小满/.test(fact)), false);
 });
 
+test('world facts reject undiscovered stable entity IDs without leaking them into history or recap', async () => {
+  const transcriptStore = createTranscriptStore({ memory: new Map() });
+  const leaked = JSON.parse(validWorldResponse('npc:lin-xiaoman 在 location:nether-rift 等待我。'));
+  leaked.memory.facts = [{
+    subjectId: 'world:forged-token', predicate: 'claims',
+    object: 'npc:lin-xiaoman 在 location:nether-rift 等待我', confidence: 1
+  }];
+  const runner = runnerWithNarrator(async () => JSON.stringify(leaked), transcriptStore);
+  const state = seededAiState();
+  const rejected = await runner.runWorld({ state, input: '我检查柴房门缝', settings: { provider: 'groq' } });
+
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
+  const leakedHistory = `${buildHistoryView(rejected.state || state).facts.join('\n')}\n${answerSystemQuery(rejected.state || state, '回顾之前发生的事').blocks.map((block) => block.text).join('\n')}`;
+  assert.doesNotMatch(leakedHistory, /npc:lin-xiaoman|location:nether-rift/);
+
+  const known = seededAiState();
+  known.codex.characters.push('林小满');
+  const knownResponse = JSON.parse(validWorldResponse('我在柴房门缝里重新确认 npc:lin-xiaoman 留下的旧记号。'));
+  knownResponse.memory.facts = [{
+    subjectId: 'world:known-token', predicate: 'confirms', object: 'npc:lin-xiaoman 留下旧记号', confidence: 1
+  }];
+  const accepted = await runnerWithNarrator(async () => JSON.stringify(knownResponse))
+    .runWorld({ state: known, input: '我检查柴房门缝', settings: { provider: 'groq' } });
+  assert.equal(accepted.ok, true, accepted.error);
+  assert.ok(accepted.state.memory.facts.some((fact) => fact.subjectId === 'world:known-token'));
+});
+
 test('AI chapter summaries are derived only from committed visible blocks', async () => {
   const response = JSON.parse(validWorldResponse());
   response.memory.chapterSummary = '我已抵达飞升台，并与林小满完成了最后的约定。';
@@ -291,6 +319,36 @@ test('a generated NPC named only in memory facts cannot be registered or discove
 
   assert.equal(result.ok, false);
   assert.deepEqual(await transcriptStore.allTurns('ai-journey'), []);
+});
+
+test('dynamic NPC registration and discovery require narr or dialogue rather than sys text', async () => {
+  const sysOnly = JSON.parse(validWorldResponse());
+  sysOnly.blocks = [
+    { type: 'narr', text: detailedFirstPerson('我只看见雨巷的空石阶，尚未遇见陌生人。') },
+    { type: 'sys', text: '秋药师正在雨巷等候。' }
+  ];
+  sysOnly.memory.entities = [{
+    id: 'generated:npc:herbalist-qiu', kind: 'npc', name: '秋药师', location: '赵府柴房', purpose: '在雨巷中收集伤药', traits: ['谨慎']
+  }];
+  sysOnly.memory.facts = [];
+  const hidden = await runnerWithNarrator(async () => JSON.stringify(sysOnly))
+    .runWorld({ state: seededAiState(), input: '我观察柴房后巷', settings: { provider: 'groq' } });
+  assert.equal(hidden.ok, true, hidden.error);
+  assert.equal(hidden.state.memory.entities['generated:npc:herbalist-qiu'], undefined);
+  assert.equal(hidden.state.codex.characters.includes('秋药师'), false);
+
+  const visible = JSON.parse(validWorldResponse());
+  visible.blocks = [{ type: 'dlg', name: '秋药师', text: '我是秋药师，雨巷暂时安全。', factIds: [] }];
+  visible.blocks.unshift({ type: 'narr', text: detailedFirstPerson('我看见秋药师提着药篓停在后巷缺口外。') });
+  visible.memory.entities = [{
+    id: 'generated:npc:herbalist-qiu', kind: 'npc', name: '秋药师', location: '赵府柴房', purpose: '在雨巷中收集伤药', traits: ['谨慎']
+  }];
+  visible.memory.facts = [];
+  const discovered = await runnerWithNarrator(async () => JSON.stringify(visible))
+    .runWorld({ state: seededAiState(), input: '我观察柴房后巷', settings: { provider: 'groq' } });
+  assert.equal(discovered.ok, true, discovered.error);
+  assert.equal(discovered.state.memory.entities['generated:npc:herbalist-qiu'].name, '秋药师');
+  assert.equal(discovered.state.codex.characters.includes('秋药师'), true);
 });
 
 test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {

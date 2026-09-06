@@ -46,6 +46,49 @@ function knownLocation(state, subjectId, visibleText, movedLocationIds) {
     || (movedLocationIds.has(subjectId) && visibleText.includes(name));
 }
 
+function factTextValues(raw) {
+  const values = [];
+  const visit = (value) => {
+    if (typeof value === 'string' || typeof value === 'number') values.push(String(value));
+    else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === 'object') Object.values(value).forEach(visit);
+  };
+  visit(raw);
+  return values.join(' ');
+}
+
+function stableReferenceIds(raw) {
+  return [...new Set(factTextValues(raw).match(/(?:generated:npc|npc|location|item|quest):[\p{L}\p{N}_.-]+/gu) || [])];
+}
+
+function allowedFactReferences(state, raw, options) {
+  const visibleText = cleanText(options.visibleText || '', 12_000);
+  const visibleSubjectIds = new Set(Array.isArray(options.visibleSubjectIds)
+    ? options.visibleSubjectIds.map((id) => cleanId(id)).filter(Boolean) : []);
+  const movedLocationIds = new Set(Array.isArray(options.movedLocationIds)
+    ? options.movedLocationIds.map((id) => cleanId(id)).filter(Boolean) : []);
+  const positiveItems = new Set(Array.isArray(options.positiveItems)
+    ? options.positiveItems.map((name) => cleanText(name, 40)).filter(Boolean) : []);
+  const acceptedQuestIds = new Set(Array.isArray(options.acceptedQuestIds)
+    ? options.acceptedQuestIds.map((id) => cleanId(id)).filter(Boolean) : []);
+  return stableReferenceIds(raw).every((id) => {
+    if (id.startsWith('npc:') || id.startsWith('generated:npc:')) return knownNpc(state, id, visibleSubjectIds);
+    if (id.startsWith('location:')) return knownLocation(state, id, visibleText, movedLocationIds);
+    if (id.startsWith('item:')) {
+      const name = id.slice('item:'.length);
+      return Boolean(ITEMS[name] && (Number(state.inventory.items?.[name] || 0) > 0
+        || state.codex.items.includes(name) || positiveItems.has(name)));
+    }
+    if (id.startsWith('quest:')) {
+      const questId = id.slice('quest:'.length);
+      return Boolean(QUESTS[questId] && (state.quests.active.some((quest) => quest.id === questId)
+        || state.quests.completed.includes(questId) || state.quests.failed.includes(questId)
+        || acceptedQuestIds.has(questId)));
+    }
+    return false;
+  });
+}
+
 function allowedMemorySubject(state, raw, options = {}) {
   const subjectId = cleanId(raw?.subjectId);
   const visibleText = cleanText(options.visibleText || '', 12_000);
@@ -123,7 +166,7 @@ export function applyMemoryCandidates(source, candidates = [], turnId = 'unknown
     const predicate = cleanId(raw.predicate, 48);
     const object = cleanText(raw.object, 160);
     const allowedSubject = allowedMemorySubject(state, raw, options);
-    if (!subjectId || !predicate || !object || !allowedSubject) continue;
+    if (!subjectId || !predicate || !object || !allowedSubject || !allowedFactReferences(state, raw, options)) continue;
 
     const lockedConflict = state.memory.facts.some((fact) => fact.locked
       && fact.subjectId === subjectId && fact.predicate === predicate && fact.object !== object);
