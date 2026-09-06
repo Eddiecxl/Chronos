@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import {
   buildCharacterView,
@@ -9,6 +10,16 @@ import {
   buildMapView,
   buildQuestView
 } from '../public/luoying-xiantu/panel-view.js';
+
+test('legacy local character panel renders derived attack defense and max spirit', async () => {
+  const script = await readFile(new URL('../public/luoying-xiantu/app.js', import.meta.url), 'utf8');
+  const localPanel = script.slice(script.indexOf('function renderLocalCharacterPanel()'), script.indexOf('function renderCharacterPanel()'));
+
+  assert.match(localPanel, /derivedPlayerStats\(state\)/);
+  assert.match(localPanel, /攻击 \$\{derived\.attack\}/);
+  assert.match(localPanel, /防御 \$\{derived\.defense\}/);
+  assert.match(localPanel, /灵力 \$\{state\.player\.spirit\}\/\$\{derived\.maxSpirit\}/);
+});
 
 test('new AI panel views expose current knowledge but no future catalog', () => {
   const state = createGameState('照月', 'ai', () => 'panels-new');

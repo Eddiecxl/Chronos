@@ -109,6 +109,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
 
   async function executeWorld({ state: source, input, settings = {}, transactionId }, requestType) {
     let contract;
+    let failureState = source;
     const cleanInput = cleanText(input, 2_000);
     const txId = cleanText(transactionId || idFactory(), 100);
     try {
@@ -181,15 +182,25 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
           if (stateStore.saveAutoIfJourney) {
             journaled = await stateStore.saveAutoIfJourney('ai', journaled, state.journeyId, state.revision);
           } else journaled = stateStore.saveAuto('ai', journaled) || journaled;
+          let transcriptAppended = false;
           try {
             await transcriptStore.appendTurn(committed.journeyId, turn);
+            transcriptAppended = true;
             committed = migrateGameState({ ...journaled, transactionJournal: null }, 'ai');
             if (stateStore.saveAutoIfJourney) {
-              committed = await stateStore.saveAutoIfJourney(
-                'ai', committed, state.journeyId, journaled.revision, txId
-              );
+              try {
+                committed = await stateStore.saveAutoIfJourney(
+                  'ai', committed, state.journeyId, journaled.revision, txId
+                );
+              } catch (error) {
+                if (!transcriptStore.deleteTurn) throw new Error('自动存档冲突后无法补偿本回合记录。');
+                await transcriptStore.deleteTurn(committed.journeyId, turn.id);
+                failureState = stateStore.loadAuto?.('ai') || journaled;
+                throw error;
+              }
             } else committed = stateStore.saveAuto('ai', committed) || committed;
-          } catch {
+          } catch (error) {
+            if (transcriptAppended) throw error;
             committed = journaled;
           }
         } catch (error) {
@@ -198,7 +209,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       } else await transcriptStore.appendTurn(committed.journeyId, turn);
       return { ok: true, state: committed, blocks: narration.blocks, turn };
     } catch (error) {
-      return failure(error, cleanInput, txId, contract, source);
+      return failure(error, cleanInput, txId, contract, failureState);
     }
   }
 

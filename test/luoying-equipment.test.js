@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
-import { commitAiEquipment, commitAiEquipmentForActiveJourney, equipOwnedItem, restoreAiEquipmentState } from '../public/luoying-xiantu/equipment.js';
+import { commitAiEquipment, commitAiEquipmentForActiveJourney, equipOwnedItem, normalizeEquipment, restoreAiEquipmentState } from '../public/luoying-xiantu/equipment.js';
 import { createStorage } from '../public/luoying-xiantu/storage.js';
 
 function memoryStorage() {
@@ -56,6 +56,24 @@ test('AI equipment refuses to write while battle state exists', async () => {
   await assert.rejects(commitAiEquipment(storage, source, '踏云履'), /战斗/);
   assert.equal(writes, 0);
   assert.deepEqual(source.battle, { enemyId: 'wolf', hp: 23 });
+});
+
+test('AI equipment refuses pending state before it mutates or saves', async () => {
+  const source = createGameState('照月', 'ai', () => 'pending-gear');
+  source.pending = { type: 'intro-escape' };
+  source.inventory.items['踏云履'] = 1;
+  let writes = 0;
+
+  assert.throws(() => equipOwnedItem(source, '踏云履'), /进行|待处理/);
+  await assert.rejects(commitAiEquipment({ saveAutoIfJourney: async () => { writes += 1; } }, source, '踏云履'), /进行|待处理/);
+  assert.equal(writes, 0);
+  assert.equal(source.equipment.slots.feet, null);
+});
+
+test('equipment normalization tolerates null legacy payloads', () => {
+  assert.deepEqual(normalizeEquipment(null).slots, {
+    head: null, neck: null, body: null, arms: null, hands: null, legs: null, feet: null
+  });
 });
 
 test('a stale equipment tab restores the authoritative autosave after a revision conflict', async () => {

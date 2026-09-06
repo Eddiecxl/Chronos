@@ -43,7 +43,6 @@ function sanitizeTurn(turn) {
   if (createdAt) output.createdAt = createdAt;
   const fingerprint = cleanText(turn.fingerprint, 1_000);
   if (fingerprint) output.fingerprint = fingerprint;
-  if (Array.isArray(turn.suggestions)) output.suggestions = turn.suggestions.map((value) => cleanText(value, 160)).filter(Boolean).slice(0, 8);
   if (jsonSize(output) > MAX_TURN_BYTES) throw new Error('单回合记录过大。');
   return output;
 }
@@ -55,7 +54,7 @@ function sanitizeImport(turns) {
 }
 
 function publicTurn(record) {
-  const { key: _key, journeyId: _journeyId, order: _order, ...turn } = record;
+  const { key: _key, journeyId: _journeyId, order: _order, suggestions: _suggestions, ...turn } = record;
   return structuredClone(turn);
 }
 

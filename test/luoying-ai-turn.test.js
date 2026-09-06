@@ -165,7 +165,7 @@ test('successful turns persist transcript facts and generated entities only afte
   assert.equal((await transcriptStore.allTurns('ai-journey')).length, 1);
   assert.ok(result.state.memory.facts.some((fact) => fact.object.includes('两名赵府追兵')));
   assert.equal(result.state.memory.entities['generated:npc:zhao-scout'].name, '赵府斥候');
-  assert.ok(result.state.codex.characters.includes('林小满'));
+  assert.equal(result.state.codex.characters.includes('林小满'), false);
 });
 
 test('autosave failure compensates the transcript and reports an unchanged AI turn', async () => {
@@ -185,6 +185,40 @@ test('autosave failure compensates the transcript and reports an unchanged AI tu
   assert.deepEqual(result.state.equipment, state.equipment);
   assert.deepEqual(await transcriptStore.allTurns(state.journeyId), []);
   assert.match(result.error, /quota full/);
+});
+
+test('a final autosave conflict removes only this appended turn and returns the authoritative state', async () => {
+  const transcripts = createTranscriptStore({ memory: new Map() });
+  const storage = createStorage(memoryStorage());
+  const state = seededAiState();
+  storage.saveAuto('ai', state);
+  await transcripts.appendTurn(state.journeyId, {
+    id: 'existing', kind: 'world', blocks: [{ type: 'narr', text: '别的标签页留下的旧记录。' }]
+  });
+  let saves = 0;
+  const stateStore = {
+    saveAuto: (...args) => storage.saveAuto(...args),
+    loadAuto: (...args) => storage.loadAuto(...args),
+    async saveAutoIfJourney(...args) {
+      saves += 1;
+      if (saves === 2) {
+        const otherTab = storage.loadAuto('ai');
+        otherTab.player.gold = 77;
+        await storage.saveAutoIfJourney('ai', otherTab, otherTab.journeyId, otherTab.revision);
+      }
+      return storage.saveAutoIfJourney(...args);
+    }
+  };
+  const runner = createAiTurnRunner({
+    aiClient: { narrate: async () => validWorldResponse() }, transcriptStore: transcripts, stateStore,
+    idFactory: () => 'tx-conflicted-final-save'
+  });
+
+  const result = await runner.runWorld({ state, input: '查看门缝', settings: { provider: 'groq' } });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.state.player.gold, 77);
+  assert.deepEqual((await transcripts.allTurns(state.journeyId)).map((turn) => turn.id), ['existing']);
 });
 
 test('a durable journal recovers a committed world turn after transcript storage fails', async () => {

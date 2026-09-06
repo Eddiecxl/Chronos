@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildNarrationPrompt, createAiClient, modelsForProvider, parseNarration, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
+import { equipOwnedItem } from '../public/luoying-xiantu/equipment.js';
 
 function fakeStorage(seed = {}) {
   const values = new Map(Object.entries(seed));
@@ -142,6 +143,18 @@ test('narration prompt requests free-text world data without suggested actions',
   const messages = buildNarrationPrompt(state, [], '查看门缝');
   assert.doesNotMatch(messages[1].content, /suggestions/);
   assert.match(messages[1].content, /progress/);
+});
+
+test('legacy narration prompt reports derived equipped combat values', () => {
+  let state = createGameState('照月', 'ai');
+  for (const itemName of ['玄铁剑', '外门青衫', '云纹束冠', '踏云履']) {
+    state.inventory.items[itemName] = 1;
+    state = equipOwnedItem(state, itemName);
+  }
+  const snapshot = JSON.parse(buildNarrationPrompt(state, [], '我准备迎战')[0].content.split('当前状态：')[1]);
+
+  assert.equal(snapshot.spirit, '30/40');
+  assert.deepEqual(snapshot.stats, { attack: 29, defense: 14, maxSpirit: 40 });
 });
 
 test('parser rejects JavaScript-shaped output instead of evaluating it', () => {

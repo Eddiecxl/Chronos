@@ -502,13 +502,14 @@ async function saveAiEquipment(itemName) {
 function renderLocalCharacterPanel() {
   const grid = node('div', 'panel-grid');
   const realm = REALMS[state.player.realm];
+  const derived = derivedPlayerStats(state);
   grid.append(panelCard('道途', [
     `${state.player.name} · ${realm.name}`,
     `气血 ${state.player.hp}/${state.player.maxHp} · 灵气 ${state.player.qi}/${realm.need}`,
-    `灵力 ${state.player.spirit}/${state.player.maxSpirit} · 灵石 ${state.player.gold}`
+    `灵力 ${state.player.spirit}/${derived.maxSpirit} · 灵石 ${state.player.gold}`
   ]));
   grid.append(panelCard('攻守', [
-    `攻击 ${state.player.attack} · 防御 ${state.player.defense}`,
+    `攻击 ${derived.attack} · 防御 ${derived.defense}`,
     `武器 ${state.equipment.weapon || '无'} · 护甲 ${state.equipment.armor || '无'} · 配饰 ${state.equipment.accessory || '无'}`
   ]));
   grid.append(panelCard('所学功法', state.techniques.known.map((name) => {

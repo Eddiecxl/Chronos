@@ -22,6 +22,16 @@ const AUTHORED_FACTS = {
   }
 };
 const AUTHORED_NPCS_BY_ID = new Map(Object.entries(NPCS).map(([name, npc]) => [npc.id, { name, ...npc }]));
+const MAIN_QUEST_CHAPTERS = {
+  'escape-zhao': ['act1-awakening', 'act1-rain-alley'],
+  'meet-elder': ['act1-elder-test'],
+  'outer-trial': ['act1-mountain-gate', 'act2-outer-trial'],
+  'missing-disciples': ['act2-sect-undercurrent'], 'secret-jade': ['act2-sect-undercurrent'],
+  'sect-tournament': ['act2-tournament'],
+  'mystic-entry': ['act3-mystic-entry'], 'mystic-core': ['act3-core-choice'], 'truth-below': ['act3-stone-truth'],
+  'north-defense': ['act4-north-arrival'], 'rift-descent': ['act4-rift-descent'], 'sect-choice': ['act4-sect-reckoning'],
+  'read-stars': ['act5-star-reflection'], 'heart-demon': ['act5-heart-mirror'], 'final-tribulation': ['act5-tribulation']
+};
 const PLAYER_PUPPET_PATTERNS = [
   /你(?:立刻|毫不犹豫地|终于)?(?:答应|同意|拒绝|决定|选择|承诺|发誓|加入|背叛|爱上)/,
   /你(?:感到|觉得)(?:无比|非常|由衷)?(?:喜悦|幸福|悔恨|忠诚|爱慕|憎恨)/,
@@ -194,6 +204,17 @@ function contractActors(state, input, chapter) {
   return [...actors.values()].slice(0, 16);
 }
 
+function legalQuestIds(state, chapter) {
+  const known = new Set([
+    ...state.quests.active.map((quest) => quest.id), ...state.quests.completed, ...state.quests.failed
+  ]);
+  return Object.entries(QUESTS).filter(([id, quest]) => {
+    if (known.has(id)) return false;
+    if (quest.type === 'side') return quest.act <= chapter.act;
+    return MAIN_QUEST_CHAPTERS[id]?.includes(chapter.id);
+  }).map(([id]) => id);
+}
+
 export function createSceneContract(source, input, turnId) {
   const state = migrateGameState(source, 'ai');
   const derived = derivedPlayerStats(state);
@@ -247,7 +268,7 @@ export function createSceneContract(source, input, turnId) {
     openLoopIds: [...state.director.openLoops],
     legalItemIds: Object.keys(ITEMS),
     legalLocations: unlockedLocations,
-    legalQuestIds: Object.keys(QUESTS),
+    legalQuestIds: legalQuestIds(state, chapter),
     activeQuestIds: state.quests.active.map((quest) => quest.id),
     knownQuestIds: [...new Set([
       ...state.quests.active.map((quest) => quest.id), ...state.quests.completed, ...state.quests.failed
@@ -410,6 +431,22 @@ function validateEffects(contract, effects, errors) {
   return normalized;
 }
 
+function playerChoseOpportunity(input) {
+  return /(?:我)?(?:决定|选择|前往|进入|交付|接受|答应|同意|要去|去往|赶往)/u.test(String(input || ''));
+}
+
+function validateDecisiveOpportunityEffects(contract, advanced, normalizedEffects, errors) {
+  if (contract.pace.level < 3) return;
+  const opportunityId = contract.pace.opportunityId;
+  const introducedNow = advanced.includes(opportunityId) && !contract.openLoopIds.includes(opportunityId);
+  const decisionEffects = Boolean(normalizedEffects.location || normalizedEffects.addQuests?.length);
+  if (introducedNow && decisionEffects) {
+    errors.push('决定性机会只能呈现给玩家，不能在同一回合替玩家决定地点或接取任务。');
+  } else if (decisionEffects && (!contract.openLoopIds.includes(opportunityId) || !playerChoseOpportunity(contract.playerInput))) {
+    errors.push('地点或任务的决定效果必须在既有机会后由玩家本回合明确选择。');
+  }
+}
+
 export function validateAiWorldTurn(source, contract, narration, recentTurns = []) {
   const state = migrateGameState(source, 'ai');
   const errors = [];
@@ -490,7 +527,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (contract.pace.level >= 2 && (!consequences.length || progressKind === 'minor')) {
     errors.push('局势已停滞，必须通过自然事件产生主线后果。');
   }
-  if (contract.pace.level >= 3
+  if (contract.pace.level >= 3 && !contract.openLoopIds.includes(contract.pace.opportunityId)
     && (!advanced.includes(contract.pace.opportunityId) || !consequences.length)) {
     errors.push('必须自然呈现当前章节的决定性机会及其因果后果，并停在玩家选择前。');
   }
@@ -529,6 +566,7 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   if (narration.timeCost === 'instant' && !hasEffect && !hasClockChange && !hasLoopChange) errors.push('回合没有产生状态、时间或危险变化。');
 
   const normalizedEffects = validateEffects(contract, narration.effects || {}, errors);
+  validateDecisiveOpportunityEffects(contract, advanced, normalizedEffects, errors);
   const actorById = new Map(contract.actors.flatMap((actor) => [[actor.id, actor], [actor.name, actor]]));
   for (const [actorId, factIds] of Object.entries(factsByActor)) {
     const actor = actorById.get(actorId);
@@ -558,6 +596,17 @@ export function commitValidatedWorldTurn(source, contract, narration) {
   const validation = validateAiWorldTurn(source, contract, narration, []);
   if (!validation.ok) throw new Error(`AI 世界回合未通过验证：${validation.errors.join('；')}`);
   let state = applyValidatedEffects(source, validation.normalizedEffects);
+  const visibleActorNames = new Set((narration.blocks || [])
+    .filter((block) => block?.type === 'dlg')
+    .map((block) => cleanText(block.name, 40)).filter(Boolean));
+  for (const actor of contract.actors) {
+    if (!visibleActorNames.has(actor.name) || state.memory.entities[actor.id]) continue;
+    state.memory.entities[actor.id] = {
+      id: actor.id, kind: 'npc', name: actor.name, status: actor.status, location: actor.location,
+      purpose: actor.purpose, traits: [], knownFactIds: [...actor.knownFactIds], facts: [...actor.knownFactIds],
+      createdTurnId: contract.turnId, lastSeenTurn: state.memory.turnCount + 1
+    };
+  }
   const minutes = TIME_COSTS[narration.timeCost];
   const totalMinutes = state.story.minuteOfDay + minutes;
   state.story.day += Math.floor(totalMinutes / 1440);
@@ -588,6 +637,7 @@ export function commitValidatedWorldTurn(source, contract, narration) {
   state.director.openLoops = [...new Set([
     ...state.director.openLoops.filter((id) => !resolved.has(id)),
     ...(Array.isArray(progress.openLoops) ? progress.openLoops.map((id) => cleanId(id)).filter(Boolean) : []),
+    ...(advanced.includes(contract.pace.opportunityId) ? [contract.pace.opportunityId] : []),
     ...aftermath
   ])].slice(-40);
   state.director.recentFingerprints = [...state.director.recentFingerprints, validation.fingerprint].slice(-8);

@@ -164,7 +164,6 @@ function safeTransactionJournal(value) {
       provider: cleanText(value.turn.provider, 40),
       model: cleanText(value.turn.model, 100),
       blocks,
-      suggestions: stringList(value.turn.suggestions, 5, 160),
       fingerprint: cleanText(value.turn.fingerprint, 1_000),
       createdAt: cleanText(value.turn.createdAt, 40)
     }

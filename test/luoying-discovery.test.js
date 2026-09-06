@@ -45,3 +45,38 @@ test('visible dialogue and committed rewards unlock only what the player experie
   assert.ok(next.codex.items.includes('云纹束冠'));
   assert.equal(next.codex.characters.includes('林小满'), false);
 });
+
+test('AI relationship effects and narration-only name drops never discover unproven characters', () => {
+  const state = createGameState('照月', 'ai', () => 'discover-relationship');
+  state.memory.entities['npc:lin-xiaoman'] = {
+    id: 'npc:lin-xiaoman', kind: 'npc', name: '林小满', status: 'alive', location: '落霞宗外门'
+  };
+  state.relationships['林小满'] = 9;
+
+  const next = applyCommittedDiscoveries(state, {
+    blocks: [
+      { type: 'narr', text: '我听人提起林小满的名字，却还未见到她。' },
+      { type: 'sys', text: '林小满将在未来出现。' }
+    ],
+    effects: { relationships: { '林小满': 9 } }
+  });
+
+  assert.deepEqual(next.codex.characters, []);
+});
+
+test('a static NPC needs visible dialogue plus registered entity evidence before discovery', () => {
+  const state = createGameState('照月', 'ai', () => 'discover-static');
+
+  const withoutEvidence = applyCommittedDiscoveries(state, {
+    blocks: [{ type: 'dlg', name: '赵天霸', text: '把门打开。' }]
+  });
+  assert.deepEqual(withoutEvidence.codex.characters, []);
+
+  state.memory.entities['npc:zhao-tianba'] = {
+    id: 'npc:zhao-tianba', kind: 'npc', name: '赵天霸', status: 'alive', location: '青石镇'
+  };
+  const discovered = applyCommittedDiscoveries(state, {
+    blocks: [{ type: 'dlg', name: '赵天霸', text: '把门打开。' }]
+  });
+  assert.deepEqual(discovered.codex.characters, ['赵天霸']);
+});

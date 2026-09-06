@@ -214,6 +214,61 @@ test('arbitrary and repeated quest tags do not reset chapter momentum', () => {
   assert.equal(validateAiWorldTurn(committed, repeatedContract, started).ok, false);
 });
 
+test('AI contracts expose only quests legal for the current chapter and reject future authored quests', () => {
+  const state = createGameState('照月', 'ai', () => 'quest-gate');
+  const contract = createSceneContract(state, '我查看门缝', 'turn-quest-gate');
+  const narration = narrationWithText('我在墙角找到一块通往飞升台的令牌，却知道现在还不能接下那条遥远的道路。');
+  narration.effects = { addQuests: ['final-tribulation'] };
+  narration.progress = {
+    advanced: ['quest:final-tribulation:clue'], consequences: ['我记下远方传闻'],
+    openLoops: ['loop:far-future'], resolvedLoops: [], dangerClocks: { zhaoPursuit: 1 }
+  };
+
+  assert.equal(contract.legalQuestIds.includes('final-tribulation'), false);
+  const result = validateAiWorldTurn(state, contract, narration);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /任务/.test(error)));
+});
+
+test('a newly introduced decisive opportunity cannot also apply player decision effects', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 8;
+  const contract = createSceneContract(state, '我观察戒律堂外的动静', 'turn-opportunity-effects');
+  const narration = narrationWithText('我看见执事把后山封锁令放在案边，门外正好留出一条能递交证物的空隙。');
+  narration.effects = { location: '百宝坊市', addQuests: ['herb-basket'] };
+  narration.progress = {
+    advanced: [contract.pace.opportunityId], consequences: ['递交证物的时机已经出现'],
+    openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
+  };
+
+  const result = validateAiWorldTurn(state, contract, narration);
+  assert.equal(result.ok, false);
+  assert.ok(result.errors.some((error) => /机会|选择/.test(error)));
+});
+
+test('a pre-existing decisive opportunity may resolve naturally after the player chooses it', () => {
+  const state = seededAiState();
+  state.director.chapterTurns = 8;
+  const firstContract = createSceneContract(state, '我观察戒律堂外的动静', 'turn-opportunity-marker');
+  const marker = narrationWithText('我看见执事把后山封锁令放在案边，门外正好留出一条能递交证物的空隙。');
+  marker.progress = {
+    advanced: [firstContract.pace.opportunityId], consequences: ['递交证物的时机已经出现'],
+    openLoops: [], resolvedLoops: [], dangerClocks: { demonicTrail: 1 }
+  };
+  const afterMarker = commitValidatedWorldTurn(state, firstContract, marker);
+  const nextContract = createSceneContract(afterMarker, '我决定前往百宝坊市交付线索', 'turn-opportunity-choice');
+  const chosen = narrationWithText('我顺着已经显露的机会离开樱林，将线索送往可以继续追查的雨巷。');
+  chosen.blocks[0].text = `我把证物收进衣襟，沿着夜雨中的石阶赶往青石镇。巷口的灯火映在积水里，巡查的脚步从身后渐远；我借着摊棚遮掩穿过人群，终于抵达能继续追查线索的地方。${'甲乙丙丁戊己庚辛'.repeat(24)}`;
+  chosen.effects = { location: '青石镇' };
+  chosen.progress = {
+    advanced: ['scene:opportunity-chosen'], consequences: ['我抵达坊市继续追查'],
+    openLoops: [], resolvedLoops: [nextContract.pace.opportunityId], dangerClocks: { demonicTrail: 1 }
+  };
+
+  assert.ok(nextContract.openLoopIds.includes(nextContract.pace.opportunityId));
+  assert.equal(validateAiWorldTurn(afterMarker, nextContract, chosen).ok, true);
+});
+
 test('completed quests cannot be re-added as material chapter progress', () => {
   const state = seededAiState();
   state.director.turnsSinceChapterProgress = 2;

@@ -1,3 +1,5 @@
+import { derivedPlayerStats } from './equipment.js';
+
 const SETTINGS_KEY = 'luoying_ai_v3';
 const SESSION_KEY = 'chronos-session-token-v1';
 
@@ -135,12 +137,14 @@ export function parseNarration(text, requestType = 'world') {
 }
 
 export function buildNarrationPrompt(state, history, input) {
+  const derived = derivedPlayerStats(state);
   const snapshot = {
     name: state.player.name,
     realm: state.player.realm,
     hp: `${state.player.hp}/${state.player.maxHp}`,
     qi: `${state.player.qi}`,
-    spirit: `${state.player.spirit}/${state.player.maxSpirit}`,
+    spirit: `${state.player.spirit}/${derived.maxSpirit}`,
+    stats: derived,
     gold: state.player.gold,
     act: state.story.act,
     scene: state.story.scene,
