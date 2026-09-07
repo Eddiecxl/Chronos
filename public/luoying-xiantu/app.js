@@ -6,6 +6,7 @@ import {
 import { createStorage } from './storage.js';
 import { createTranscriptStore } from './transcript-store.js';
 import { createAiClient, modelsForProvider, PROVIDERS } from './ai-client.js';
+import { personalGroqRecoveryDraft, recoveryActionFor } from './ai-recovery.js';
 import { createAiTurnRunner } from './ai-turn.js';
 import { createHeroArt, createScenePresentation } from './scene-art.js';
 import { classifyTurn } from './turn-router.js';
@@ -261,6 +262,9 @@ async function runLocalChoice(choiceId, label) {
 
 function showRetry(result, type) {
   retryContext = { type, ...result.retry };
+  const recovery = recoveryActionFor(result, aiSettings);
+  dom.switchProviderButton.dataset.recoveryKind = recovery.kind;
+  dom.switchProviderButton.textContent = recovery.label;
   const message = String(result.error || 'AI 回合失败').replace(/[。.!！]+$/u, '');
   const blocked = ['AI_QUOTA_EXHAUSTED', 'AI_MODEL_UNAVAILABLE', 'AI_AUTH_FAILED', 'AI_NOT_CONFIGURED', 'AI_BAD_REQUEST'].includes(result.code);
   dom.retryMessage.textContent = `${message}。世界仍停在行动前，输入和已保存记忆不变。${blocked ? '请先到 AI 设置处理，重复点击不会解决这个问题。' : ''}`;
@@ -281,6 +285,8 @@ function clearRetry() {
   clearInterval(retryTicker); retryTicker = null;
   dom.retryButton.disabled = false;
   dom.retryButton.textContent = '重试本回合';
+  dom.switchProviderButton.dataset.recoveryKind = 'settings';
+  dom.switchProviderButton.textContent = '切换模型';
   retryContext = null;
   dom.retryPanel.hidden = true;
 }
@@ -1093,7 +1099,22 @@ dom.retryButton.addEventListener('click', () => {
   else if (retryContext.type === 'world') runAiWorld(retryContext.input, retryContext.transactionId);
   else runAiSystem(retryContext.input);
 });
-dom.switchProviderButton.addEventListener('click', openAiDialog);
+dom.switchProviderButton.addEventListener('click', () => {
+  const usePersonalGroq = dom.switchProviderButton.dataset.recoveryKind === 'personal-groq';
+  openAiDialog();
+  if (!usePersonalGroq) return;
+  const draft = personalGroqRecoveryDraft(runtimeKeys.get('groq'));
+  dom.providerSelect.value = draft.provider;
+  // Run the normal provider transition first: it moves the old provider's
+  // value back to its own runtime slot and replaces the field with Groq's.
+  syncAiFields(true);
+  dom.credentialSelect.value = draft.credentialMode;
+  dom.modelInput.value = draft.model;
+  dom.apiKeyInput.value = draft.key;
+  syncAiFields();
+  dom.connectionStatus.textContent = '网站共用 Groq 额度正在冷却。填入你自己的 Groq Key 后保存；它只留在本页运行内存，不会写入存档。';
+  dom.apiKeyInput.focus();
+});
 dom.editRetryButton.addEventListener('click', () => { dom.retryPanel.hidden = true; dom.playerInput.value = retryContext?.input || dom.playerInput.value; resizeComposer(); dom.playerInput.focus(); });
 dom.retryTitleButton.addEventListener('click', renderTitle);
 dom.saveButton.addEventListener('click', openSaveDialog);

@@ -132,11 +132,23 @@ export function createGameAiService({
 } = {}) {
   if (typeof fetchImpl !== 'function') throw new Error('fetch implementation is required');
   const takeRateSlot = rateLimiter(now);
+  // Groq throttles an API key at the organisation level. A browser-only
+  // cooldown cannot protect the shared Render key from another account or
+  // tab immediately repeating the same rejected request.
+  const upstreamCooldowns = new Map();
+  const cooldownKey = (provider, model) => `${provider}:${model}`;
+
+  function activeUpstreamCooldown(provider, model) {
+    const key = cooldownKey(provider, model);
+    const remaining = (upstreamCooldowns.get(key) || 0) - now();
+    if (remaining > 0) return remaining;
+    upstreamCooldowns.delete(key);
+    return 0;
+  }
 
   return {
     async generate(accountKey, input, { signal } = {}) {
       const request = validateGameAiBody(input);
-      takeRateSlot(accountKey);
       const config = PROVIDER_CONFIG[request.provider];
       const key = cleanText(env[config.keyName], 1_000);
       if (!key) throw new GameAiError('这个网站 AI 提供商尚未配置。', 'AI_NOT_CONFIGURED', 503);
@@ -146,6 +158,9 @@ export function createGameAiService({
       if (model !== configuredModel && !config.allowedModels.includes(model)) {
         throw new GameAiError('网站模式不支持这个模型，请选择该提供商的允许模型。', 'AI_BAD_REQUEST', 400);
       }
+      const cooldownMs = activeUpstreamCooldown(request.provider, model);
+      if (cooldownMs) throw Object.assign(new GameAiError('当前模型额度繁忙，请稍后再试。', 'AI_RATE_LIMITED', 429), { retryAfterMs: cooldownMs });
+      takeRateSlot(accountKey);
       const url = config.protocol === 'gemini'
         ? `${config.endpoint}/${encodeURIComponent(model)}:generateContent`
         : config.endpoint;
@@ -175,6 +190,7 @@ export function createGameAiService({
               response.status === 401 || response.status === 403 ? 503 : response.status),
               classified.retryAfterMs ? { retryAfterMs: classified.retryAfterMs } : {});
             if (response.status === 429) {
+              upstreamCooldowns.set(cooldownKey(request.provider, model), now() + (failure.retryAfterMs || 10_000));
               throw failure;
             }
             if (!TRANSIENT_STATUSES.has(response.status) || attempt === maxAttempts - 1) throw failure;

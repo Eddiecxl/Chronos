@@ -147,6 +147,26 @@ test('default Qwen does not repeat a transient site request', async () => {
   assert.equal(calls, 1);
 });
 
+test('a Groq cooldown blocks another website account without touching the upstream again', async () => {
+  let current = 10_000;
+  let calls = 0;
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' }, now: () => current,
+    fetchImpl: async () => {
+      calls += 1;
+      return calls === 1
+        ? jsonResponse({ error: { message: 'try again in 30s' } }, 429, { 'retry-after': '30' })
+        : jsonResponse({ choices: [{ message: { content: '恢复' } }] });
+    }
+  });
+  await assert.rejects(service.generate('first-player', validRequest('groq')), error => error.code === 'AI_RATE_LIMITED' && error.retryAfterMs === 30000);
+  await assert.rejects(service.generate('second-player', validRequest('groq')), error => error.code === 'AI_RATE_LIMITED' && error.retryAfterMs === 30000);
+  assert.equal(calls, 1);
+  current += 30001;
+  assert.equal((await service.generate('second-player', validRequest('groq'))).text, '恢复');
+  assert.equal(calls, 2);
+});
+
 test('site proxy reports the upstream retry-after window without silently waiting', async () => {
   let calls = 0;
   const waits = [];
