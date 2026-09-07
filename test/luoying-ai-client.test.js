@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildNarrationPrompt, createAiClient, modelsForProvider, parseNarration, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
+import { generationOptions } from '../public/luoying-xiantu/ai-policy.js';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { equipOwnedItem } from '../public/luoying-xiantu/equipment.js';
 
@@ -33,8 +34,17 @@ const testContext = () => ({
   messages: [{ role: 'user', content: '只返回严格 JSON。' }]
 });
 
-test('Groq defaults to its production GPT OSS model', () => {
-  assert.equal(PROVIDERS.groq.model, 'openai/gpt-oss-120b');
+test('Groq defaults to Qwen 3.8 and puts the lower-usage model first', () => {
+  assert.equal(PROVIDERS.groq.model, 'qwen/qwen3.8-27b');
+  assert.equal(modelsForProvider('groq')[0], 'qwen/qwen3.8-27b');
+  assert.match(PROVIDERS.groq.label, /Qwen 3\.8/);
+});
+
+test('Qwen 3.8 uses a bounded instruct-mode response budget', () => {
+  const options = generationOptions('groq', 'qwen/qwen3.8-27b', 'world');
+  assert.equal(options.reasoning_effort, 'none');
+  assert.equal(options.max_completion_tokens, 1100);
+  assert.deepEqual(options.response_format, { type: 'json_object' });
 });
 
 test('Gemini defaults to the stable 3.6 Flash model', () => {
@@ -43,8 +53,8 @@ test('Gemini defaults to the stable 3.6 Flash model', () => {
 
 test('the settings model picker receives only the selected provider models', () => {
   assert.deepEqual(modelsForProvider('groq'), [
-    'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b',
-    'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b'
+    'qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b',
+    'openai/gpt-oss-safeguard-20b', 'qwen/qwen3.6-27b'
   ]);
   assert.deepEqual(modelsForProvider('gemini'), [
     'gemini-3.8-flash', 'gemini-3.7-flash', 'gemini-3.6-flash',
@@ -97,6 +107,23 @@ test('personal AI never keeps retrying against a depleted quota', async () => {
   await assert.rejects(client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext()), /2 秒/);
   assert.deepEqual(waits, []);
   assert.equal(calls, 1);
+});
+
+test('personal Qwen does not repeat a transient upstream request', async () => {
+  let calls = 0;
+  const client = createAiClient({
+    storage: fakeStorage(), sleep: async () => {},
+    fetchImpl: async () => { calls += 1; return jsonResponse({ error: { message: 'busy' } }, 503); }
+  });
+  await assert.rejects(client.narrate({ provider: 'groq', credentialMode: 'personal', key: 'secret' }, testContext()), error => error.code === 'AI_UPSTREAM_FAILED');
+  assert.equal(calls, 1);
+});
+
+test('the Qwen default migration changes only the previous 120B default, not a chosen 20B model', () => {
+  const oldDefault = fakeStorage({ luoying_ai_v3: JSON.stringify({ provider: 'groq', credentialMode: 'site', model: 'openai/gpt-oss-120b' }) });
+  assert.equal(createAiClient({ storage: oldDefault, fetchImpl: async () => jsonResponse({}) }).loadSettings().model, 'qwen/qwen3.8-27b');
+  const chosen20b = fakeStorage({ luoying_ai_v3: JSON.stringify({ provider: 'groq', credentialMode: 'site', model: 'openai/gpt-oss-20b' }) });
+  assert.equal(createAiClient({ storage: chosen20b, fetchImpl: async () => jsonResponse({}) }).loadSettings().model, 'openai/gpt-oss-20b');
 });
 
 test('personal Mistral uses its fixed OpenAI-compatible endpoint', async () => {

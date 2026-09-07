@@ -1,8 +1,9 @@
 import { derivedPlayerStats } from './equipment.js';
-import { generationOptions, throwIfCancelled } from './ai-policy.js';
+import { generationOptions, isGroqQwen38, throwIfCancelled } from './ai-policy.js';
 import { aiHttpError, retryAfterMs } from './ai-errors.js';
 
 const SETTINGS_KEY = 'luoying_ai_v3';
+const QWEN_DEFAULT_MIGRATION_KEY = 'luoying_qwen_default_v1';
 const SESSION_KEY = 'chronos-session-token-v1';
 
 export const PROVIDERS = {
@@ -13,9 +14,10 @@ export const PROVIDERS = {
     models: ['gpt-4.1-mini', 'gpt-5.4-mini', 'gpt-5.6-terra']
   },
   groq: {
-    label: 'Groq · GPT-OSS', model: 'openai/gpt-oss-120b', baseUrl: 'https://api.groq.com/openai/v1',
-    credentialMode: 'site', siteCapable: true, recommended: true, tip: '响应快，但免费额度容易限流；网站和个人模式的额度取决于对应 Groq 账户。',
-    models: ['openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b', 'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b']
+    label: 'Groq · Qwen 3.8', model: 'qwen/qwen3.8-27b', baseUrl: 'https://api.groq.com/openai/v1',
+    credentialMode: 'site', siteCapable: true, recommended: true,
+    tip: '默认：Qwen 3.8 的低用量第三人称叙事。它仍受 Groq 免费账户的组织级额度限制，但不会再为同一回合做第二次校准请求。',
+    models: ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b', 'qwen/qwen3.6-27b']
   },
   mistral: {
     label: 'Mistral', model: 'mistral-small-latest', baseUrl: 'https://api.mistral.ai/v1',
@@ -295,7 +297,20 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
   const cooldowns = new Map();
   const client = {
     loadSettings() {
-      try { return normalizeSettings(JSON.parse(storage?.getItem(SETTINGS_KEY) || '{}')); }
+      try {
+        const saved = JSON.parse(storage?.getItem(SETTINGS_KEY) || '{}');
+        const migrated = normalizeSettings(saved);
+        // The prior site default was GPT-OSS. Honor the explicit Qwen switch
+        // once without overwriting any later player-selected model.
+        if (migrated.provider === 'groq' && !storage?.getItem(QWEN_DEFAULT_MIGRATION_KEY)
+          && migrated.model === 'openai/gpt-oss-120b') {
+          migrated.model = PROVIDERS.groq.model;
+          const { key: _key, ...safe } = migrated;
+          storage?.setItem(SETTINGS_KEY, JSON.stringify(safe));
+          storage?.setItem(QWEN_DEFAULT_MIGRATION_KEY, '1');
+        }
+        return migrated;
+      }
       catch { return normalizeSettings(); }
     },
     saveSettings(settingsInput) {
@@ -349,7 +364,7 @@ export function createAiClient({ fetchImpl = globalThis.fetch?.bind(globalThis),
         body: JSON.stringify({
           model: settings.model, messages, ...generationOptions(settings.provider, settings.model, requestType)
         })
-      }, 2, sleep, cooldowns);
+      }, isGroqQwen38(settings.provider, settings.model) ? 1 : 2, sleep, cooldowns);
       return extractOpenAi(data);
     },
     async testConnection(settings) {

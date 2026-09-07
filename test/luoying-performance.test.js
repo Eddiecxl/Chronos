@@ -16,14 +16,14 @@ test('site errors reach the player without multiplying server retries', async ()
   assert.equal(calls, 1);
 });
 
-test('Groq generation uses low reasoning with enough room for complete story JSON', async () => {
+test('default Groq Qwen generation uses instruct mode with a bounded compact-story budget', async () => {
   let body;
   const service = createGameAiService({ env: { GROQ_API_KEY: 'test' }, fetchImpl: async (_, options) => {
     body = JSON.parse(options.body); return response({ choices: [{ message: { content: '{}' } }] });
   } });
   await service.generate('player', { ...context, provider: 'groq' });
-  assert.equal(body.reasoning_effort, 'low');
-  assert.ok(body.max_completion_tokens >= 2800);
+  assert.equal(body.reasoning_effort, 'none');
+  assert.equal(body.max_completion_tokens, 1100);
 });
 
 test('quota exhaustion returns immediately without another billable generation', async () => {

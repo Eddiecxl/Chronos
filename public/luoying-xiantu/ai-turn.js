@@ -9,7 +9,7 @@ import {
 import { applyCommittedDiscoveries, chapterSummaryFromVisibleBlocks, storyVisibleTextFor, hasVisibleFactEvidence } from './discovery.js';
 import { answerSystemQuery } from './turn-router.js';
 import { LOCATIONS } from './game-data.js';
-import { throwIfCancelled } from './ai-policy.js';
+import { modelNarrativeProfile, throwIfCancelled } from './ai-policy.js';
 
 const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一叙事作者。本回合绝不能使用本地预写剧情作后备。
 规则：
@@ -30,17 +30,55 @@ const WORLD_BIBLE = `你是中文修仙文字游戏《落樱仙途》的唯一�
 const cleanText = (value, max = 2_000) => String(value ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, max);
 const defaultId = () => globalThis.crypto?.randomUUID?.() || `tx-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-function recentForPrompt(turns) {
-  return turns.filter((turn) => turn.kind !== 'system').slice(-4).map((turn) => ({
+function recentForPrompt(turns, { limit = 4, textLimit = 500, inputLimit = 300 } = {}) {
+  return turns.filter((turn) => turn.kind !== 'system').slice(-limit).map((turn) => ({
     id: cleanText(turn.id, 100),
     kind: turn.kind,
-    userText: cleanText(turn.userText, 300),
+    userText: cleanText(turn.userText, inputLimit),
     blocks: Array.isArray(turn.blocks) ? turn.blocks.slice(-4).map((block) => ({
       type: block.type,
       ...(block.name ? { name: cleanText(block.name, 40) } : {}),
-      text: cleanText(block.text, 500)
+      text: cleanText(block.text, textLimit)
     })) : []
   }));
+}
+
+function compactQwenContract(contract) {
+  return {
+    now: [contract.time.day, contract.time.period, contract.location.name],
+    player: {
+      name: contract.player.name, realm: contract.player.realm,
+      hp: `${contract.player.hp}/${contract.player.maxHp}`,
+      qi: contract.player.qi, spirit: `${contract.player.spirit}/${contract.player.maxSpirit}`
+    },
+    chapter: { id: contract.chapter.id, goal: contract.sceneGoal },
+    actors: contract.actors.slice(0, 4).map((actor) => ({
+      id: actor.id, name: actor.name, status: actor.status, purpose: actor.purpose,
+      facts: actor.knownFactIds.slice(0, 4)
+    })),
+    facts: contract.facts.slice(-8).map((fact) => ({ id: fact.id, subjectId: fact.subjectId, object: fact.object })),
+    threads: {
+      clocks: contract.dangerClocks, loops: contract.openLoopIds.slice(-5),
+      quests: contract.activeQuests, destinations: contract.legalLocations.slice(0, 5).map((entry) => entry.name)
+    }
+  };
+}
+
+function compactQwenMemory(packet) {
+  const summary = Object.values(packet?.chapterSummaries || {}).join(' ').slice(-360);
+  const facts = Array.isArray(packet?.facts) ? packet.facts.slice(0, 6).map((fact) => ({
+    id: fact.id, subjectId: fact.subjectId, object: cleanText(fact.object, 100)
+  })) : [];
+  return { ...(summary ? { summary } : {}), facts };
+}
+
+function buildQwenMessages(contract, memoryPacket, recentTurns, requestType) {
+  const opening = requestType === 'opening';
+  const recent = recentForPrompt(recentTurns, { limit: 1, textLimit: 260, inputLimit: 160 });
+  const jsonShape = '{"blocks":[{"type":"narr","text":"正文"}],"effects":{},"progress":{"advanced":["scene:进展"],"consequences":["实际后果"],"openLoops":[],"resolvedLoops":[],"dangerClocks":{}},"memory":{"facts":[],"entities":[]},"timeCost":"brief"}';
+  const system = `你是《落樱仙途》的中文互动叙事作者。旁白固定第三人称：主角只能写“${contract.player.name}”或“他”，不可称“你、主角、玩家”，也不可写他人的内心或场外秘密。玩家原话是主角刚做的唯一行动；不得替他新增关键对白、承诺、选择、立场或感情。写一个180–320字的具体当下场面：行动→反应→结果→可继续的压力或线索。不要列选项，不要总结跳过过程。灵气用于突破，灵力用于功法。只输出一个 JSON 对象，不要代码块，也不可省略任何顶层字段。必须按这个形状填入真实内容：${jsonShape}。每回合必须有一个实际进展和具体后果；memory.facts 只写正文中直接出现的新证据。${opening ? '这是开篇：写他在赵府柴房苏醒，停在第一个可行动的危险前；progress.advanced 必须为 ["opening:awakened"]。' : ''}`;
+  const user = `状态=${JSON.stringify(compactQwenContract(contract))}\n记忆=${JSON.stringify(compactQwenMemory(memoryPacket))}\n最近=${JSON.stringify(recent)}\n行动=${contract.playerInput}\n仅输出 JSON。`;
+  return [{ role: 'system', content: system }, { role: 'user', content: user }];
 }
 
 function compactContract(contract) {
@@ -72,7 +110,8 @@ function compactContract(contract) {
   };
 }
 
-function buildWorldMessages(contract, memoryPacket, recentTurns, requestType) {
+function buildWorldMessages(contract, memoryPacket, recentTurns, requestType, profile) {
+  if (profile.compactContext) return buildQwenMessages(contract, memoryPacket, recentTurns, requestType);
   const openingRule = requestType === 'opening'
     ? '这是开篇：所有可见剧情文字都必须由你生成。以“我”从昏沉中恢复感知写起，让我察觉迫近危险，但停在第一个需要由我决定的行动前。progress.advanced 必须至少包含精确值 "opening:awakened"。'
     : '这是普通世界行动：逐字尊重场景契约内的 playerInput，并让它产生真实后果。';
@@ -141,12 +180,16 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
         questIds: state.quests.active.map((quest) => quest.id)
       });
       const recentTurns = await transcriptStore.recentTurns(state.journeyId, 10);
-      let messages = buildWorldMessages(contract, memoryPacket, recentTurns, requestType);
+      // Callers outside the game shell may intentionally omit a model.  Keep
+      // the historic first-person contract for those calls; the persisted game
+      // settings always supply Qwen explicitly after normalization.
+      const profile = modelNarrativeProfile(settings.provider || 'groq', settings.model || '');
+      let messages = buildWorldMessages(contract, memoryPacket, recentTurns, requestType, profile);
       let narration;
       let validation;
       let raw = '';
 
-      const maxAttempts = 2;
+      const maxAttempts = profile.maxAttempts;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         throwIfCancelled(signal);
         onProgress(attempt ? 'repair' : 'generating', attempt ? { errors: validation?.errors, candidate: narration } : {});
@@ -156,7 +199,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
         onProgress('validating');
         try {
           narration = narrationFrom(raw, requestType);
-          validation = validateAiWorldTurn(state, contract, narration, recentTurns);
+          validation = validateAiWorldTurn(state, contract, narration, recentTurns, { narrativePerspective: profile.perspective });
           // Optional bookkeeping must not trigger another generation when the
           // story itself is valid. Never invent substitute text or facts, and
           // never suppress discovery, agency, state, or progression errors.
@@ -165,7 +208,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
             const visible = storyVisibleTextFor(narration);
             const grounded = { ...narration, memory: { ...narration.memory,
               facts: narration.memory.facts.filter(fact => !fact.subjectId.startsWith('world:') || hasVisibleFactEvidence(fact, visible)) } };
-            const checked = validateAiWorldTurn(state, contract, grounded, recentTurns);
+            const checked = validateAiWorldTurn(state, contract, grounded, recentTurns, { narrativePerspective: profile.perspective });
             if (checked.ok) { narration = grounded; validation = checked; }
           }
         } catch (error) {
@@ -184,7 +227,7 @@ export function createAiTurnRunner({ aiClient, transcriptStore, stateStore, now 
       throwIfCancelled(signal);
       onProgress('saving');
 
-      let committed = commitValidatedWorldTurn(state, contract, narration);
+      let committed = commitValidatedWorldTurn(state, contract, narration, { narrativePerspective: profile.perspective });
       const visibleText = storyVisibleTextFor(narration);
       const visibleEntityIds = (narration.memory?.entities || [])
         .filter((entity) => visibleText.includes(String(entity?.name || '').trim()))

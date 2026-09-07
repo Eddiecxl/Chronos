@@ -71,6 +71,25 @@ function runnerWithNarrator(narrate, transcriptStore = createTranscriptStore({ m
   return createAiTurnRunner({ aiClient: { narrate }, transcriptStore, idFactory: () => 'tx-test', now: () => 1000 });
 }
 
+test('Qwen uses a compact third-person turn and never spends a second repair request', async () => {
+  const candidate = JSON.parse(validWorldResponse());
+  candidate.blocks[0].text = candidate.blocks[0].text.replace(/我/g, '照月');
+  const requests = [];
+  const result = await runnerWithNarrator(async (_settings, request) => {
+    requests.push(request);
+    return JSON.stringify(candidate);
+  }).runWorld({
+    state: seededAiState(), input: '我查看门缝',
+    settings: { provider: 'groq', model: 'qwen/qwen3.8-27b' }
+  });
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].messages.length, 2);
+  assert.ok(requests[0].messages.reduce((total, message) => total + message.content.length, 0) <= 2300);
+  assert.match(requests[0].messages[0].content, /第三人称/);
+  assert.match(requests[0].messages[0].content, /不可省略任何顶层字段/);
+});
+
 test('unsupported optional world memory is dropped without rewriting valid AI story or a second request', async () => {
   const candidate = JSON.parse(validWorldResponse());
   candidate.memory.facts.push({ subjectId: 'world:noise', predicate: 'location', object: '门缝处', confidence: 1 });

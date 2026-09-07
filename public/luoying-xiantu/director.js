@@ -697,7 +697,7 @@ function validateDecisiveOpportunityEffects(contract, advanced, normalizedEffect
   }
 }
 
-export function validateAiWorldTurn(source, contract, narration, recentTurns = []) {
+export function validateAiWorldTurn(source, contract, narration, recentTurns = [], options = {}) {
   const state = migrateGameState(source, 'ai');
   const errors = [];
   if (!narration || typeof narration !== 'object' || Array.isArray(narration)) {
@@ -729,7 +729,13 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   const allText = blocks.map((block) => cleanText(block?.text, 12_000)).join('');
   const narrationText = blocks.filter((block) => block?.type === 'narr')
     .map((block) => cleanText(block.text, 12_000)).join('');
-  if (!narrationText.includes('我') || /你|主角|玩家/u.test(narrationText)) {
+  const thirdPerson = options.narrativePerspective === 'third';
+  const protagonistName = cleanText(contract.player?.name, 40);
+  if (thirdPerson) {
+    if (!protagonistName || (!narrationText.includes(protagonistName) && !narrationText.includes('他')) || /你|主角|玩家/u.test(narrationText)) {
+      errors.push(`旁白视角错误：Qwen 叙事必须以第三人称主角名“${protagonistName}”或“他”书写；NPC 对主角的“你”只能放在 dlg 对白中。`);
+    }
+  } else if (!narrationText.includes('我') || /你|主角|玩家/u.test(narrationText)) {
     errors.push('旁白视角错误：narr 必须始终以主角第一人称“我”书写；NPC 对我的“你”只能放在 dlg 对白中。');
   }
   if ([...narrationText.replace(/\s/gu, '')].length < MIN_WORLD_NARRATIVE_CHARS) {
@@ -743,7 +749,9 @@ export function validateAiWorldTurn(source, contract, narration, recentTurns = [
   }
   // Modal necessity describes an unresolved choice, not a committed action.
   // Only mask the modal phrase; later actual decisions still undergo validation.
-  const agencyText = narrationText.replace(/(?:必须|需要|尚待)(?:立刻|马上|尽快)?(?:作出)?(?:决定|选择)/gu, '尚待抉择');
+  const agencyText = (thirdPerson
+    ? narrationText.replaceAll(protagonistName, '我').replace(/他/gu, '我')
+    : narrationText).replace(/(?:必须|需要|尚待)(?:立刻|马上|尽快)?(?:作出)?(?:决定|选择)/gu, '尚待抉择');
   if (FIRST_PERSON_DECISIONS.some(({ output, input }) => output.test(agencyText) && !input.test(contract.playerInput))) {
     errors.push('AI 不得擅自替玩家补写第一人称的选择、承诺、对白或感情。');
   }
@@ -872,8 +880,8 @@ function periodForMinute(minute) {
   return '夜晚';
 }
 
-export function commitValidatedWorldTurn(source, contract, narration) {
-  const validation = validateAiWorldTurn(source, contract, narration, []);
+export function commitValidatedWorldTurn(source, contract, narration, options = {}) {
+  const validation = validateAiWorldTurn(source, contract, narration, [], options);
   if (!validation.ok) throw new Error(`AI 世界回合未通过验证：${validation.errors.join('；')}`);
   let state = applyValidatedEffects(source, validation.normalizedEffects, { chapterExit: validation.chapterExit });
   const visibleActorNames = new Set((narration.blocks || [])

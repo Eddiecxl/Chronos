@@ -1,4 +1,4 @@
-import { generationOptions } from '../public/luoying-xiantu/ai-policy.js';
+import { generationOptions, isGroqQwen38 } from '../public/luoying-xiantu/ai-policy.js';
 import { aiHttpError, retryAfterMs } from '../public/luoying-xiantu/ai-errors.js';
 
 const PROVIDER_CONFIG = {
@@ -9,7 +9,7 @@ const PROVIDER_CONFIG = {
   },
   groq: {
     endpoint: 'https://api.groq.com/openai/v1/chat/completions',
-    keyName: 'GROQ_API_KEY', modelName: 'GROQ_MODEL', defaultModel: 'openai/gpt-oss-120b', protocol: 'openai',
+    keyName: 'GROQ_API_KEY', modelName: 'GROQ_MODEL', defaultModel: 'qwen/qwen3.8-27b', protocol: 'openai',
     allowedModels: [
       'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'openai/gpt-oss-safeguard-20b',
       'qwen/qwen3.8-27b', 'qwen/qwen3.6-27b'
@@ -142,6 +142,7 @@ export function createGameAiService({
       if (!key) throw new GameAiError('这个网站 AI 提供商尚未配置。', 'AI_NOT_CONFIGURED', 503);
       const configuredModel = cleanText(env[config.modelName] || config.defaultModel, 140);
       const model = request.model || configuredModel;
+      const maxAttempts = isGroqQwen38(request.provider, model) ? 1 : 2;
       if (model !== configuredModel && !config.allowedModels.includes(model)) {
         throw new GameAiError('网站模式不支持这个模型，请选择该提供商的允许模型。', 'AI_BAD_REQUEST', 400);
       }
@@ -163,7 +164,7 @@ export function createGameAiService({
       if (signal?.aborted) abort();
       const timer = setTimeout(abort, timeoutMs);
       try {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         try {
           if (controller.signal.aborted) throw new GameAiError('AI 请求超时或已取消。', 'AI_TIMEOUT', 504);
           const response = await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal: controller.signal });
@@ -176,7 +177,7 @@ export function createGameAiService({
             if (response.status === 429) {
               throw failure;
             }
-            if (!TRANSIENT_STATUSES.has(response.status) || attempt === 1) throw failure;
+            if (!TRANSIENT_STATUSES.has(response.status) || attempt === maxAttempts - 1) throw failure;
             const waitMs = retryAfterMs(response, errorData, 500);
             if (waitMs > 1500 || now() - startedAt + waitMs >= timeoutMs) throw failure;
             await sleep(waitMs);

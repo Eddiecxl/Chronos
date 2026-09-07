@@ -953,7 +953,7 @@ function syncAiFields(resetModel = false) {
     ? `网站模式可切换允许的模型：${(provider.models || [provider.model]).join('、')}`
     : '';
   dom.baseUrlInput.value = id === 'custom' ? (resetModel ? '' : aiSettings.baseUrl || dom.baseUrlInput.value) : provider.baseUrl || '';
-  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式可切换允许的模型。' : ' 官方地址已填好，只需填写 Key 和模型。'}${id === 'groq' ? ' 120B 偏重细节；20B 适合极速测试。' : id === 'gemini' ? ' 使用 Google 原生接口，模型路径由游戏自动补全。' : ''}`;
+  dom.providerTip.textContent = `${provider.tip}${siteMode ? ' 网站模式可切换允许的模型。' : ' 官方地址已填好，只需填写 Key 和模型。'}${id === 'groq' ? ' Qwen 3.8 默认使用第三人称、精简上下文和单次生成，减少免费额度消耗。' : id === 'gemini' ? ' 使用 Google 原生接口，模型路径由游戏自动补全。' : ''}`;
 }
 
 function openAiDialog() {

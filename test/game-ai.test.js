@@ -133,8 +133,18 @@ test('transient upstream responses receive exactly one retry', async () => {
       ? jsonResponse({ error: { message: 'busy secret' } }, 503)
       : jsonResponse({ choices: [{ message: { content: '恢复' } }] }))
   });
-  assert.equal((await service.generate('player', validRequest('groq'))).text, '恢复');
+  assert.equal((await service.generate('player', { ...validRequest('groq'), model: 'openai/gpt-oss-120b' })).text, '恢复');
   assert.equal(calls, 2);
+});
+
+test('default Qwen does not repeat a transient site request', async () => {
+  let calls = 0;
+  const service = createGameAiService({
+    env: { GROQ_API_KEY: 'secret' }, sleep: async () => {},
+    fetchImpl: async () => { calls += 1; return jsonResponse({ error: { message: 'busy' } }, 503); }
+  });
+  await assert.rejects(service.generate('player', validRequest('groq')), error => error.code === 'AI_UPSTREAM_FAILED');
+  assert.equal(calls, 1);
 });
 
 test('site proxy reports the upstream retry-after window without silently waiting', async () => {

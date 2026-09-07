@@ -1,4 +1,4 @@
-import { createAiClient } from '../public/luoying-xiantu/ai-client.js';
+import { createAiClient, PROVIDERS } from '../public/luoying-xiantu/ai-client.js';
 import { createAiTurnRunner } from '../public/luoying-xiantu/ai-turn.js';
 import { createGameState } from '../public/luoying-xiantu/game-state.js';
 import { createTranscriptStore } from '../public/luoying-xiantu/transcript-store.js';
@@ -17,7 +17,9 @@ const client = createAiClient({ storage: null, fetchImpl: async (url, options) =
 } });
 const runner = createAiTurnRunner({ aiClient: client, transcriptStore: createTranscriptStore({ memory: new Map() }) });
 const started = performance.now();
-const settings = { provider, credentialMode: 'personal', key, model: process.env.GAME_BENCH_MODEL || undefined };
+// Match the game shell: an omitted model must mean that provider's current
+// default, rather than quietly exercising an older value from .env.
+const settings = { provider, credentialMode: 'personal', key, model: process.env.GAME_BENCH_MODEL || PROVIDERS[provider]?.model };
 const method = process.argv.includes('--world') ? 'runWorld' : 'runOpening';
 const result = await runner[method]({ state: createGameState('顾长生', 'ai'), input: '我贴近门缝，屏住呼吸，仔细辨认脚步来自哪里。', settings, signal: AbortSignal.timeout(45000),
   onProgress: (stage, details) => console.log(JSON.stringify({ stage, ...details, ms: Math.round(performance.now() - started) })) });

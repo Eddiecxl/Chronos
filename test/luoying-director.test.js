@@ -696,6 +696,28 @@ test('narration may present a pending decision without choosing it for the playe
   assert.equal(result.ok, true);
 });
 
+test('Qwen third-person narration keeps player agency instead of forcing a decision', () => {
+  const state = seededAiState();
+  const contract = createSceneContract(state, '我听完黑衣人的条件', 'turn-qwen-third-person');
+  const thirdPersonText = narrationWithText('照月听完黑衣人的条件，脚步仍停在原处。他看见雨水顺着血契边缘滑落，却没有答应任何一方。')
+    .blocks[0].text.replace(/我/g, '照月');
+  const thirdPerson = {
+    ...narrationWithText('照月听完黑衣人的条件，脚步仍停在原处。他看见雨水顺着血契边缘滑落，却没有答应任何一方。'),
+    blocks: [{ type: 'narr', text: thirdPersonText }],
+    progress: { advanced: ['discovery:masked-man-pact'], consequences: ['血契的条件已被照月看清'], openLoops: ['loop:blood-oath'], dangerClocks: { demonicTrail: 1 } },
+    memory: { facts: [{ subjectId: 'world:pact', predicate: 'seen', object: '雨水顺着血契边缘滑落', confidence: 1 }] }
+  };
+  const accepted = validateAiWorldTurn(state, contract, thirdPerson, [], { narrativePerspective: 'third' });
+  assert.equal(accepted.ok, true);
+  const pronounOnly = structuredClone(thirdPerson);
+  pronounOnly.blocks[0].text = pronounOnly.blocks[0].text.replaceAll('照月', '他');
+  assert.equal(validateAiWorldTurn(state, contract, pronounOnly, [], { narrativePerspective: 'third' }).ok, true);
+  const forced = structuredClone(thirdPerson);
+  forced.blocks[0].text += '照月随即答应加入魔宗。';
+  const rejected = validateAiWorldTurn(state, contract, forced, [], { narrativePerspective: 'third' });
+  assert.ok(rejected.errors.some((error) => /替玩家|擅自/.test(error)));
+});
+
 test('the first awakening needs no artificial time tick, but cannot be repeated later', () => {
   const state = createGameState('照月', 'ai');
   const narration = { ...narrationWithText('我刚从昏沉中醒来，近处脚步声逐渐清晰。'),
